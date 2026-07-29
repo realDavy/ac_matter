@@ -2,7 +2,6 @@
 build/
 build-*/
 *.elf
-*.bin
 *.map
 *.hex
 
