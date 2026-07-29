@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BC7215 Matter AC Web Installer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root{--bg:#f5f7fb;--card:#fff;--text:#172033;--muted:#667085;--line:#d9e2f2;--primary:#2563eb;--accent:#06b6d4;--soft:#dbeafe;--danger:#dc2626;--ok:#15803d;--shadow:0 20px 55px rgba(15,23,42,.12);--esp-tools-button-color:#2563eb;--esp-tools-button-text-color:#fff;--esp-tools-button-border-radius:999px}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:var(--text);background:radial-gradient(circle at top left,rgba(37,99,235,.18),transparent 34rem),radial-gradient(circle at top right,rgba(6,182,212,.18),transparent 28rem),linear-gradient(180deg,#f8fbff 0%,var(--bg) 52%,#fff 100%);line-height:1.6}
+    .page{width:min(760px,calc(100% - 28px));margin:auto;padding:28px 0 56px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:30px}.brand{display:flex;align-items:center;gap:12px;font-weight:780}.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:14px;color:#fff;background:linear-gradient(135deg,var(--primary),var(--accent));font-weight:900}.muted{color:var(--muted)}
+    .hero,.card,.info{background:rgba(255,255,255,.95);border:1px solid rgba(217,226,242,.95);border-radius:28px;box-shadow:var(--shadow);backdrop-filter:blur(18px)}.hero{padding:clamp(30px,7vw,58px);margin-bottom:24px}.badges{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px}.badge{padding:8px 12px;border-radius:999px;background:var(--soft);color:#1e3a8a;border:1px solid #bfdbfe;font-size:.9rem;font-weight:680}h1{font-size:clamp(2.25rem,8vw,4.3rem);line-height:.98;letter-spacing:-.055em;margin:0 0 18px}.lead{margin:0;color:var(--muted);font-size:1.1rem}
+    .card{overflow:hidden}.head{padding:26px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#fff,#f8fafc)}.label{display:inline-flex;margin-bottom:14px;padding:4px 10px;border-radius:999px;background:var(--soft);color:#1e3a8a;border:1px solid #bfdbfe;font-size:.78rem;font-weight:800;letter-spacing:.07em}.head h2{margin:0 0 8px}.body{padding:24px 26px 26px}.section{margin:0 0 8px;color:var(--primary);font-size:.8rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase}.note{margin:0 0 15px;color:var(--muted)}table{width:100%;border-collapse:collapse;border:1px solid var(--line);background:#fff}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left}th{background:#f1f5f9;font-size:.82rem}.pin{display:inline-flex;padding:2px 9px;border-radius:999px;background:#e0f2fe;color:#075985;font-weight:750}.power{margin:15px 0 0;padding:11px 12px;border:1px solid var(--line);border-radius:14px;background:#f8fafc;color:#475569;font-size:.88rem}
+    .installer{margin-top:22px;padding:18px;border:1px dashed rgba(37,99,235,.42);border-radius:18px;background:var(--soft);text-align:center}.btn{width:100%;min-height:48px;padding:12px 18px;border:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,var(--primary),var(--accent));font:inherit;font-weight:780;cursor:pointer}.btn:disabled{opacity:.6;cursor:not-allowed}.unsupported{display:block;color:var(--danger);font-weight:700}.status{margin:10px 0 0;color:var(--muted);font-size:.82rem}.status.ready{color:var(--ok);font-weight:700}.status.missing{color:var(--danger);font-weight:700}.info{margin-top:24px;padding:24px 26px}.info h2{margin:0 0 10px}.info p{margin:0;color:var(--muted)}code{padding:2px 7px;border-radius:7px;background:#eff6ff;color:#1e3a8a}footer{margin-top:32px;text-align:center;color:var(--muted)}
+    @media(max-width:560px){.top{align-items:flex-start;flex-direction:column}.hero,.card,.info{border-radius:22px}.head,.body,.info{padding-left:20px;padding-right:20px}}
+  </style>
+</head>
+<body>
+<main class="page">
+  <header class="top"><div class="brand"><div class="mark">B</div><span>BC7215 Matter AC Controller</span></div><div class="muted">ESP32-C3 Web Installer</div></header>
+  <section class="hero"><div class="badges"><span class="badge">ESP Web Tools</span><span class="badge">ESP32-C3</span></div><h1>Install the BC7215 Matter firmware.</h1><p class="lead">For ESP32-C3 XIAO and ESP32-C3 Super Mini boards using the GPIO configuration below.</p></section>
+  <article class="card" data-firmware="firmware/esp32-c3/firmware.bin" data-manifest="firmware/esp32-c3/manifest.json">
+    <header class="head"><span class="label">ESP32-C3</span><h2>ESP32-C3 XIAO / Super Mini</h2><p class="muted">BC7215 Matter AC controller firmware.</p></header>
+    <div class="body"><p class="section">Pin connections</p><p class="note">Connect the BC7215 module as shown below.</p>
+      <table><thead><tr><th>BC7215 signal</th><th>ESP32-C3 GPIO</th></tr></thead><tbody>
+        <tr><td>BC7215 TX</td><td><span class="pin">GPIO4</span></td></tr>
+        <tr><td>BC7215 RX</td><td><span class="pin">GPIO3</span></td></tr>
+        <tr><td>BC7215 BUSY</td><td><span class="pin">GPIO5</span></td></tr>
+        <tr><td>BC7215 MOD</td><td><span class="pin">GPIO6</span></td></tr>
+      </tbody></table>
+      <p class="power">Connect BC7215 GND to GND and VCC to 3.3 V.</p>
+      <div class="installer"><esp-web-install-button manifest="firmware/esp32-c3/manifest.json"><button class="btn" slot="activate">Install ESP32-C3 firmware</button><span class="unsupported" slot="unsupported">Use desktop Chrome or Microsoft Edge.</span><span class="unsupported" slot="not-allowed">Open this page over HTTPS or localhost.</span></esp-web-install-button><p class="status">Checking firmware package…</p></div>
+    </div>
+  </article>
+  <section class="info"><p class="section">Firmware file</p><h2>The installer uses <code>firmware.bin</code></h2><p>Run the supplied script after building the ESP-IDF project. It generates a merged offset-0 image containing the bootloader, partition table, application and other required images.</p></section>
+  <footer>BC7215 Matter AC Controller · ESP32-C3 Web Installer</footer>
+</main>
+<script>
+(async()=>{const card=document.querySelector('.card');const status=card.querySelector('.status');const button=card.querySelector('.btn');try{const f=await fetch(card.dataset.firmware,{method:'HEAD',cache:'no-store'});if(!f.ok)throw new Error();const m=await fetch(card.dataset.manifest,{cache:'no-store'});if(!m.ok)throw new Error();const manifest=await m.json();status.textContent=`Firmware ${manifest.version} is ready`;status.classList.add('ready')}catch(e){status.textContent='firmware.bin has not been generated';status.classList.add('missing');button.disabled=true}})();
+</script>
+</body>
+</html>

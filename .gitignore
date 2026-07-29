@@ -1,19 +1,66 @@
-CMakeLists.txt.user
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
+# ESP-IDF build output
+build/
+build-*/
+*.elf
+*.bin
+*.map
+*.hex
 
-# CLion
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#cmake-build-*
+# ESP-IDF generated config
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+sdkconfig.debug
+sdkconfig.release
+
+# ESP-IDF Component Manager generated files
+managed_components/
+
+# Optional:
+# For an application project, you may choose to commit dependencies.lock
+# for reproducible builds. During early development, ignoring it avoids
+# stale copied lock files causing confusion.
+dependencies.lock
+
+# CMake / Ninja generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.ninja_deps
+.ninja_log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Local environment files
+.env
+.env.*
+venv/
+.venv/
+
+# ESP-IDF local artifacts
+*.flash_args
+flasher_args.json
+bootloader-flash_args
+partition-table-flash_args
+
+# Temporary files
+tmp/
+temp/
