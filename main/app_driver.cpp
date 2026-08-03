@@ -28,6 +28,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <platform/CHIPDeviceLayer.h>
+#include "ws2812_temp_light.h"
 
 using namespace chip::app::Clusters;
 using namespace esp_matter;
@@ -35,6 +36,7 @@ using namespace esp_matter;
 static const char *TAG = "app_driver";
 extern uint16_t room_air_conditioner_endpoint_id;
 extern uint16_t fan_endpoint_id;
+extern uint16_t temp_light_endpoint_id;
 static const char *TAG_IR = "ir_ac_matter";
 
 /*
@@ -51,6 +53,17 @@ void app_driver_set_ambient_sensor_active(bool active)
 bool app_driver_ambient_sensor_active(void)
 {
     return s_ambient_sensor_active.load();
+}
+
+esp_err_t app_driver_temp_light_set_power(esp_matter_attr_val_t *val)
+{
+    if (val == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const bool on = val->val.b;
+    ws2812_temp_light_set_enabled(on);
+    return ESP_OK;
 }
 
 // ESP32-C3 IR pins (plain 940nm IR LED + TSOP-style receiver).
@@ -2528,6 +2541,11 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 Mode,
                 Fan);
         }
+    }
+    else if (endpoint_id == temp_light_endpoint_id &&
+             cluster_id == OnOff::Id &&
+             attribute_id == OnOff::Attributes::OnOff::Id) {
+        err = app_driver_temp_light_set_power(val);
     }
 
       

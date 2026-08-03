@@ -103,6 +103,9 @@ void app_driver_set_ambient_sensor_active(bool active);
 
 bool app_driver_ambient_sensor_active(void);
 
+/** Apply Matter On/Off for the WS2812 temperature indicator light. */
+esp_err_t app_driver_temp_light_set_power(esp_matter_attr_val_t *val);
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
     {                                                                                   \

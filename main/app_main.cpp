@@ -24,6 +24,7 @@
 #include <app/ReadHandler.h>
 
 #include "sht30.h"
+#include "ws2812_temp_light.h"
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -36,6 +37,7 @@ static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
 uint16_t fan_endpoint_id = 0;
 uint16_t humidity_sensor_endpoint_id = 0;
+uint16_t temp_light_endpoint_id = 0;
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -280,6 +282,8 @@ app_matter_state_t app_get_matter_state_locked()
 static void sht30_temperature_notification(uint16_t /*endpoint_id*/, float temp_c,
                                            void * /*user_data*/)
 {
+    ws2812_temp_light_set_temperature_c(temp_c);
+
     const int16_t temp_x100 = static_cast<int16_t>(temp_c * 100.0f);
     chip::DeviceLayer::SystemLayer().ScheduleLambda([temp_x100]() {
         attribute_t *attribute = attribute::get(
@@ -511,8 +515,7 @@ extern "C" void app_main()
 	 * endpoint so Apple Home / Google Home show room temp on the AC tile.
 	 */
 	humidity_sensor::config_t humidity_sensor_config;
-	humidity_sensor_config.relative_humidity_measurement.measured_value =
-	    nullable<uint16_t>(5000);
+	/* MeasuredValue stays null until the first successful SHT30 sample. */
 	humidity_sensor_config.relative_humidity_measurement.min_measured_value =
 	    nullable<uint16_t>(0);
 	humidity_sensor_config.relative_humidity_measurement.max_measured_value =
@@ -529,6 +532,25 @@ extern "C" void app_main()
 	humidity_sensor_endpoint_id = endpoint::get_id(humidity_endpoint);
 	ESP_LOGI(TAG, "Humidity sensor created with endpoint_id %d",
 	         humidity_sensor_endpoint_id);
+
+	/*
+	 * WS2812 ambient-temperature indicator as a Matter On/Off Light.
+	 * Controllers can turn the breathing indicator on or off; color still
+	 * follows the SHT30 comfort scale (green → orange).
+	 */
+	on_off_light::config_t temp_light_config;
+	temp_light_config.on_off.on_off = true;
+	endpoint_t *temp_light_endpoint = on_off_light::create(
+	    node,
+	    &temp_light_config,
+	    ENDPOINT_FLAG_NONE,
+	    nullptr);
+	ABORT_APP_ON_FAILURE(temp_light_endpoint != nullptr,
+	    ESP_LOGE(TAG, "Failed to create temperature indicator light endpoint"));
+
+	temp_light_endpoint_id = endpoint::get_id(temp_light_endpoint);
+	ESP_LOGI(TAG, "Temperature indicator light created with endpoint_id %d",
+	         temp_light_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
     /* Set OpenThread platform config */
@@ -564,6 +586,17 @@ extern "C" void app_main()
 	}
     /* Starting driver with default values */
     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);
+
+	/*
+	 * WS2812 temperature indicator (independent of SHT30 presence so On/Off
+	 * still works; color follows sensor readings when available).
+	 */
+	err = ws2812_temp_light_init();
+	if (err == ESP_OK) {
+	    ws2812_temp_light_set_enabled(temp_light_config.on_off.on_off);
+	} else {
+	    ESP_LOGW(TAG, "WS2812 indicator not available (%s)", esp_err_to_name(err));
+	}
 
 	/*
 	 * Initialize SHT30 after Matter is running so attribute updates can be

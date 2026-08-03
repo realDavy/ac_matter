@@ -24,3 +24,16 @@ menu "SHT30 Temperature / Humidity Sensor"
             ADDR pin is tied to VDD (0x45).
 
 endmenu
+
+menu "WS2812 Temperature Indicator"
+
+    config WS2812_GPIO
+        int "WS2812 DIN GPIO"
+        range 0 48
+        default 7
+        help
+            Data-in pin for a single WS2812 / NeoPixel used as the ambient
+            temperature breathing indicator. Default GPIO7 avoids IR, SHT30,
+            status LED, and BOOT pins on ESP32-C3 Super Mini boards.
+
+endmenu

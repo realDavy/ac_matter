@@ -6,6 +6,7 @@
 - No cloud account required for the AC control path itself
 - Uses a plain IR LED + IR receiver (no BC7215 module)
 - Optional **SHT30** I2C temperature / humidity sensor for real room temperature (Thermostat LocalTemperature) and a Humidity Sensor endpoint
+- Optional **WS2812** temperature indicator: green→orange breathing light from SHT30 readings, with Matter On/Off control
 
 > **Coverage note:** This build only supports AC brands/protocols implemented by IRremoteESP8266. It is **not** a universal learner like the earlier BC7215-based firmware. If your remote protocol is not in the library, pairing will fail—use double-click Alt traversal to try listed protocols manually.
 
@@ -34,11 +35,29 @@ Optional SHT30 temperature / humidity sensor (I2C, defaults in `sdkconfig.defaul
 
 When the SHT30 is present, Thermostat **LocalTemperature** reports measured room temperature (updated every 5 s) and a Matter **Humidity Sensor** endpoint reports relative humidity. If the sensor is missing or fails to initialize, AC IR control still works and LocalTemperature falls back to mirroring the setpoint.
 
+Optional WS2812 temperature indicator (defaults in `sdkconfig.defaults` / menuconfig):
+
+| Signal | Default GPIO | Notes |
+|--------|--------------|-------|
+| DIN    | GPIO7        | `CONFIG_WS2812_GPIO` |
+| VCC / GND | 5V or 3V3 / GND | Many 5 V strips need a level shifter from 3V3 data |
+
+Color follows a comfort scale while breathing (~2.5 s period):
+
+| Room temp | Color |
+|-----------|-------|
+| ≤18 °C | Green |
+| ~24 °C | Yellow / amber |
+| ≥30 °C | Orange |
+
+A Matter **On/Off Light** endpoint turns this indicator on or off from Apple Home / Google Home / Home Assistant.
+
 Recommended wiring:
 
 - **TX:** ESP32 GPIO → NPN/MOSFET driver → 940 nm IR LED(s) → current-limiting resistor
 - **RX:** VS1838 / HX1838 / similar 38 kHz IR receiver: OUT→GPIO3, VCC→3V3, GND→GND
 - **SHT30:** SDA→GPIO5, SCL→GPIO6 (with pull-ups; many modules already include them), VCC→3V3, GND→GND
+- **WS2812:** DIN→GPIO7, VCC→5V/3V3, GND→GND (share ground with ESP32)
 - **Status LED:** GPIO8 (active-low on many Super Mini boards)
 - **Button:** board BOOT/Flash button (via ESP-Matter device HAL)
 
@@ -58,12 +77,12 @@ Then in an ESP-Matter / ESP-IDF environment:
 
 ```bash
 idf.py set-target esp32c3
-idf.py menuconfig   # MAX_DYNAMIC_ENDPOINT=3; optional SHT30 SDA/SCL/ADDR
+idf.py menuconfig   # MAX_DYNAMIC_ENDPOINT=4; optional SHT30 / WS2812 pins
 idf.py build
 idf.py -p <serial-port> erase-flash flash monitor
 ```
 
-Pin customization: edit `IR_TX_PIN` / `IR_RX_PIN` near the top of `main/app_driver.cpp`. SHT30 I2C pins are under **SHT30 Temperature / Humidity Sensor** in menuconfig (defaults GPIO5/GPIO6).
+Pin customization: edit `IR_TX_PIN` / `IR_RX_PIN` near the top of `main/app_driver.cpp`. SHT30 and WS2812 pins are under their menus in menuconfig (defaults GPIO5/6 and GPIO7).
 
 ## Setup and Usage
 
@@ -107,6 +126,7 @@ Hold the button ~5 seconds (LED blinks fast), then release. This erases IR pairi
 
 - **Matter / app logic:** `main/app_driver.cpp`, `main/app_main.cpp`
 - **SHT30 driver:** `main/drivers/sht30.*` (I2C single-shot, CRC-checked)
+- **WS2812 indicator:** `main/drivers/ws2812_temp_light.*` (`espressif/led_strip` RMT backend)
 - **IR component:** `components/ir_ac`
   - ESP-IDF RMT transmit/receive
   - IRremoteESP8266 `IRac` for AC encode/decode (built with `UNIT_TEST` + `SWIGLIB` so timings are generated in software and sent via RMT)
@@ -116,7 +136,7 @@ Supported protocols: see [SupportedProtocols.md](https://github.com/crankyoldgit
 
 ## Matter limitations
 
-Matter HVAC mapping is still limited compared with a full AC remote. This firmware currently focuses on Cooling/Heating, integer °C setpoints, and Low/Medium/High fan mapping from percentage, same as the previous release. With an SHT30 connected, room temperature and humidity are exposed to the controller; without it, LocalTemperature continues to mirror the commanded setpoint.
+Matter HVAC mapping is still limited compared with a full AC remote. This firmware currently focuses on Cooling/Heating, integer °C setpoints, and Low/Medium/High fan mapping from percentage, same as the previous release. With an SHT30 connected, room temperature and humidity are exposed to the controller; without it, LocalTemperature continues to mirror the commanded setpoint. The WS2812 indicator is controlled as a separate On/Off light and visualizes ambient temperature when enabled.
 
 ## License
 
