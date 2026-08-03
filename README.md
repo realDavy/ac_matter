@@ -33,7 +33,13 @@ The limitations I have found so far are listed below.
 | Temperature resolution | Usually 1°C. The air conditioner control library used by this device also supports integer temperatures only. | The device cannot specify the temperature adjustment step through the protocol. Apple and Google currently both use 0.5°C as the minimum adjustment step.                                                       |
 | Fan control            | Usually four levels: Auto, High, Medium, and Low                                                              | The fan section has its own power switch. The protocol supports both discrete fan levels and percentage-based control, but smartphone vendors currently appear to support only percentage-based fan adjustment. |
 
-Project implementation: only the most common Cooling and Heating modes are currently supported. Other modes are not yet supported. Fan settings from 1% to 33% are mapped to Low, 34% to 66% are mapped to Medium, and values above 66% are mapped to High. When the temperature is set to a value ending in 0.5°C, it is automatically rounded up to the next whole degree.
+Project implementation notes:
+
+- **Modes:** Cooling and Heating are the officially declared Thermostat features and are the modes Apple Home / Google Home typically expose. Off / Cool / Heat are the primary SystemMode values. Auto, Dry, and Fan-only are still accepted when a controller sends them (for example Home Assistant) and are mapped to the BC7215 library; they are not advertised as Thermostat features.
+- **Fan mapping:** Fan settings from 1% to 33% map to Low, 34% to 66% to Medium, and values above 66% to High. Auto has no fixed percentage; FanMode remains Auto and the percentage display uses 100%.
+- **Temperature step:** When the temperature is set to a value ending in 0.5°C (or any fractional degree), it is rounded to the nearest whole degree because the IR library only supports integer Celsius. Cooling setpoint, heating setpoint, and LocalTemperature are kept in sync to that same whole-degree value.
+- **LocalTemperature:** This device has no ambient temperature sensor. The LocalTemperature attribute tracks the commanded target temperature so controllers have a non-null value to display. It is **not** a measured room temperature.
+- **Dynamic endpoints:** The firmware creates a Room Air Conditioner endpoint and a separate Fan endpoint. `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` must be at least 3 (Root Node is separate). The project `sdkconfig.defaults` already sets this to 3.
 
 #### Limitations Introduced by Application Platforms
 
@@ -105,11 +111,11 @@ Online firmware installation is available for ESP32-C3 modules. Users do not nee
    
    #### Step 3: Change Maximum Endpoint Number
    
-   When you just changed the target chipset, the Max Endpoint is set to default value 2, we need to change it to 3. 
+   When you just changed the target chipset, the Max Endpoint is set to the default value 2; change it to **3** so both the Room Air Conditioner and Fan endpoints can be created (`sdkconfig.defaults` already uses 3 for the online/default build). 
    
    `idf.py menuconfig`
    
-   In he menu, search for MAX_DYNAMIC_ENDPOINT , and change it to 3
+   In the menu, search for `MAX_DYNAMIC_ENDPOINT`, and change it to 3.
    
    #### Step 4: Compile & Install
    
@@ -152,7 +158,7 @@ During phone setup, you will see a warning stating that this is an **uncertified
 
 After the connection is successful, the LED will change to one short flash every three seconds, indicating that the device is ready.
 
-After the device has been successfully added to the phone, interfaces for the thermostat and fan controller should appear. Because of the limitations described above, only Cooling and Heating modes are currently supported. If the temperature is set to a value ending in 0.5°C, it will be rounded up because the device does not support 0.5°C settings. Similarly, if fan speed is displayed as a continuously adjustable percentage, it will be mapped to the nearest of the three supported levels: High, Medium, or Low.
+After the device has been successfully added to the phone, interfaces for the thermostat and fan controller should appear. Because of the limitations described above, Cooling and Heating are the modes typically shown on Apple Home and Google Home. Auto, Dry, and Fan-only may appear on some controllers (such as Home Assistant) and are mapped when received. If the temperature is set to a value ending in 0.5°C, it will be rounded to the nearest whole degree because the device does not support fractional-degree IR commands. Similarly, if fan speed is displayed as a continuously adjustable percentage, it will be mapped to the nearest of the three supported levels: High, Medium, or Low. The temperature shown as the device's "current" / local temperature is the commanded target temperature, not a measured room temperature.
 
 In addition to controlling the air conditioner from a phone, the device can synchronize commands sent from the infrared remote control back to the phone. This allows the user to see remote-control operations reflected on the phone. The device should therefore be placed near the air conditioner so that it can also receive the infrared signal whenever the user operates the air conditioner with the remote control. Otherwise, those operations cannot be synchronized.
 

@@ -15,8 +15,11 @@
 #include "esp_openthread_types.h"
 #endif
 
-/** Default attribute values used during initialization */
-#define DEFAULT_POWER true
+/** Default attribute values used during initialization.
+ * Keep Off so the initial data model matches
+ * app_driver_room_air_conditioner_set_defaults().
+ */
+#define DEFAULT_POWER false
 
 typedef void *app_driver_handle_t;
 

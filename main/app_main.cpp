@@ -96,17 +96,30 @@ public:
     void OnSubscriptionTerminated(
         chip::app::ReadHandler &handler) override
     {
-        ESP_LOGI( TAG, "Matter subscription terminated");
+        ESP_LOGI(TAG, "Matter subscription terminated");
         /*
-         * This callback is invoked just before the subscription is removed.
-         * The current handler may still be present in the active handler list,
-         * so recount the subscriptions after the current CHIP operation completes.
+         * This callback runs just before the subscription is removed.
+         * The current handler may still appear in the active list, so recount
+         * after the current CHIP operation completes. That keeps IR parsing
+         * and LED state aligned with the real subscription count.
          */
-        //chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        //    []() {
-        //        app_update_matter_state_locked();
-        //    }
-        //);
+        chip::DeviceLayer::SystemLayer().ScheduleLambda(
+            []() {
+                const uint32_t count =
+                    app_count_active_subscriptions_locked();
+
+                ESP_LOGI(
+                    TAG,
+                    "OnSubscriptionTerminated: active=%lu",
+                    static_cast<unsigned long>(count)
+                );
+
+                app_driver_set_subscription_active(
+                    count > 0
+                );
+                app_driver_update_led_states();
+            }
+        );
     }
 };
 
@@ -309,23 +322,27 @@ extern "C" void app_main()
 	        Thermostat::SystemModeEnum::kOff
 	    );
 
+	/*
+	 * There is no ambient temperature sensor on this device.
+	 * LocalTemperature is initialized to the same value as the setpoints so
+	 * controllers have a non-null display value. At runtime it tracks the
+	 * commanded target temperature, not a measured room temperature.
+	 */
 	static constexpr int16_t DEFAULT_TARGET_TEMP_X100 = 2500;
-	room_air_conditioner_config.thermostat.local_temperature =
-	    DEFAULT_TARGET_TEMP_X100;
-	 room_air_conditioner_config
+	room_air_conditioner_config
 	    .thermostat
 	    .features
 	    .cooling
 	    .occupied_cooling_setpoint =
 	        DEFAULT_TARGET_TEMP_X100;
-	
+
 	room_air_conditioner_config
 	    .thermostat
 	    .features
 	    .heating
 	    .occupied_heating_setpoint =
 	        DEFAULT_TARGET_TEMP_X100;
-	
+
 	room_air_conditioner_config
 	    .thermostat
 	    .local_temperature =
