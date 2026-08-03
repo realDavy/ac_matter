@@ -23,6 +23,8 @@
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
 
+#include "sht30.h"
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
@@ -33,6 +35,7 @@
 static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
 uint16_t fan_endpoint_id = 0;
+uint16_t humidity_sensor_endpoint_id = 0;
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -269,6 +272,72 @@ app_matter_state_t app_get_matter_state_locked()
     return app_matter_state_t::CONNECTED_NO_SUBSCRIPTION;
 }
 
+/*
+ * Matter Temperature / Humidity units:
+ *   temperature = °C × 100
+ *   humidity    = %RH × 100
+ */
+static void sht30_temperature_notification(uint16_t /*endpoint_id*/, float temp_c,
+                                           void * /*user_data*/)
+{
+    const int16_t temp_x100 = static_cast<int16_t>(temp_c * 100.0f);
+    chip::DeviceLayer::SystemLayer().ScheduleLambda([temp_x100]() {
+        attribute_t *attribute = attribute::get(
+            room_air_conditioner_endpoint_id,
+            Thermostat::Id,
+            Thermostat::Attributes::LocalTemperature::Id);
+        if (attribute == nullptr) {
+            return;
+        }
+
+        esp_matter_attr_val_t val = esp_matter_invalid(nullptr);
+        attribute::get_val(attribute, &val);
+        val.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+        val.val.i16 = temp_x100;
+        attribute::update(
+            room_air_conditioner_endpoint_id,
+            Thermostat::Id,
+            Thermostat::Attributes::LocalTemperature::Id,
+            &val);
+    });
+}
+
+static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct,
+                                        void * /*user_data*/)
+{
+    if (endpoint_id == 0) {
+        return;
+    }
+
+    float clamped = humidity_pct;
+    if (clamped < 0.0f) {
+        clamped = 0.0f;
+    } else if (clamped > 100.0f) {
+        clamped = 100.0f;
+    }
+    const uint16_t humidity_x100 = static_cast<uint16_t>(clamped * 100.0f);
+
+    chip::DeviceLayer::SystemLayer().ScheduleLambda([endpoint_id, humidity_x100]() {
+        attribute_t *attribute = attribute::get(
+            endpoint_id,
+            RelativeHumidityMeasurement::Id,
+            RelativeHumidityMeasurement::Attributes::MeasuredValue::Id);
+        if (attribute == nullptr) {
+            return;
+        }
+
+        esp_matter_attr_val_t val = esp_matter_invalid(nullptr);
+        attribute::get_val(attribute, &val);
+        val.type = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16;
+        val.val.u16 = humidity_x100;
+        attribute::update(
+            endpoint_id,
+            RelativeHumidityMeasurement::Id,
+            RelativeHumidityMeasurement::Attributes::MeasuredValue::Id,
+            &val);
+    });
+}
+
 extern "C" void app_main()
 {
     esp_err_t err = ESP_OK;
@@ -436,7 +505,30 @@ extern "C" void app_main()
 
 	cluster::fan_control::feature::fan_auto::add(fan_cluster);
 
+	/*
+	 * Optional SHT30 ambient humidity endpoint.
+	 * Temperature is reported via Thermostat LocalTemperature on the RAC
+	 * endpoint so Apple Home / Google Home show room temp on the AC tile.
+	 */
+	humidity_sensor::config_t humidity_sensor_config;
+	humidity_sensor_config.relative_humidity_measurement.measured_value =
+	    nullable<uint16_t>(5000);
+	humidity_sensor_config.relative_humidity_measurement.min_measured_value =
+	    nullable<uint16_t>(0);
+	humidity_sensor_config.relative_humidity_measurement.max_measured_value =
+	    nullable<uint16_t>(10000);
 
+	endpoint_t *humidity_endpoint = humidity_sensor::create(
+	    node,
+	    &humidity_sensor_config,
+	    ENDPOINT_FLAG_NONE,
+	    nullptr);
+	ABORT_APP_ON_FAILURE(humidity_endpoint != nullptr,
+	    ESP_LOGE(TAG, "Failed to create humidity sensor endpoint"));
+
+	humidity_sensor_endpoint_id = endpoint::get_id(humidity_endpoint);
+	ESP_LOGI(TAG, "Humidity sensor created with endpoint_id %d",
+	         humidity_sensor_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
     /* Set OpenThread platform config */
@@ -472,6 +564,34 @@ extern "C" void app_main()
 	}
     /* Starting driver with default values */
     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);
+
+	/*
+	 * Initialize SHT30 after Matter is running so attribute updates can be
+	 * scheduled safely. Sensor absence is non-fatal: IR / Matter AC control
+	 * continues, and LocalTemperature falls back to setpoint mirroring.
+	 */
+	static sht30_sensor_config_t sht30_config = {
+	    .temperature = {
+	        .cb = sht30_temperature_notification,
+	        .endpoint_id = room_air_conditioner_endpoint_id,
+	    },
+	    .humidity = {
+	        .cb = sht30_humidity_notification,
+	        .endpoint_id = humidity_sensor_endpoint_id,
+	    },
+	    .user_data = nullptr,
+	    .interval_ms = 5000,
+	};
+	err = sht30_sensor_init(&sht30_config);
+	if (err == ESP_OK) {
+	    app_driver_set_ambient_sensor_active(true);
+	    ESP_LOGI(TAG, "SHT30 ambient sensor active");
+	} else {
+	    app_driver_set_ambient_sensor_active(false);
+	    ESP_LOGW(TAG,
+	             "SHT30 not available (%s); LocalTemperature will mirror setpoints",
+	             esp_err_to_name(err));
+	}
 
 #if CONFIG_ENABLE_CHIP_SHELL
     esp_matter::console::diagnostics_register_commands();

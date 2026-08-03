@@ -95,6 +95,14 @@ app_matter_state_t app_get_matter_state_locked();
 
 void app_driver_set_subscription_active(bool active);
 
+/**
+ * When true, Thermostat LocalTemperature is driven by the ambient SHT30
+ * sensor and must not be overwritten with the AC setpoint.
+ */
+void app_driver_set_ambient_sensor_active(bool active);
+
+bool app_driver_ambient_sensor_active(void);
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
     {                                                                                   \

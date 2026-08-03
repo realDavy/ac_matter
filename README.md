@@ -5,6 +5,7 @@
 - Connect air conditioners supported by [IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266) to Apple Home, Google Home, or Home Assistant via Matter
 - No cloud account required for the AC control path itself
 - Uses a plain IR LED + IR receiver (no BC7215 module)
+- Optional **SHT30** I2C temperature / humidity sensor for real room temperature (Thermostat LocalTemperature) and a Humidity Sensor endpoint
 
 > **Coverage note:** This build only supports AC brands/protocols implemented by IRremoteESP8266. It is **not** a universal learner like the earlier BC7215-based firmware. If your remote protocol is not in the library, pairing will fail—use double-click Alt traversal to try listed protocols manually.
 
@@ -22,10 +23,22 @@ static constexpr gpio_num_t IR_RX_PIN = GPIO_NUM_3;  // TSOP/VS1838 demodulator 
 static constexpr gpio_num_t SUPER_MINI_LED_GPIO = GPIO_NUM_8;
 ```
 
+Optional SHT30 temperature / humidity sensor (I2C, defaults in `sdkconfig.defaults` / menuconfig):
+
+| Signal | Default GPIO | Notes |
+|--------|--------------|-------|
+| SDA    | GPIO5        | `CONFIG_SHT30_I2C_SDA_PIN` |
+| SCL    | GPIO6        | `CONFIG_SHT30_I2C_SCL_PIN` |
+| ADDR   | GND → 0x44   | Tie to VDD for 0x45 (`CONFIG_SHT30_I2C_ADDR_VDD`) |
+| VCC / GND | 3V3 / GND | |
+
+When the SHT30 is present, Thermostat **LocalTemperature** reports measured room temperature (updated every 5 s) and a Matter **Humidity Sensor** endpoint reports relative humidity. If the sensor is missing or fails to initialize, AC IR control still works and LocalTemperature falls back to mirroring the setpoint.
+
 Recommended wiring:
 
 - **TX:** ESP32 GPIO → NPN/MOSFET driver → 940 nm IR LED(s) → current-limiting resistor
 - **RX:** VS1838 / HX1838 / similar 38 kHz IR receiver: OUT→GPIO3, VCC→3V3, GND→GND
+- **SHT30:** SDA→GPIO5, SCL→GPIO6 (with pull-ups; many modules already include them), VCC→3V3, GND→GND
 - **Status LED:** GPIO8 (active-low on many Super Mini boards)
 - **Button:** board BOOT/Flash button (via ESP-Matter device HAL)
 
@@ -45,12 +58,12 @@ Then in an ESP-Matter / ESP-IDF environment:
 
 ```bash
 idf.py set-target esp32c3
-idf.py menuconfig   # set MAX_DYNAMIC_ENDPOINT to 3 if needed
+idf.py menuconfig   # MAX_DYNAMIC_ENDPOINT=3; optional SHT30 SDA/SCL/ADDR
 idf.py build
 idf.py -p <serial-port> erase-flash flash monitor
 ```
 
-Pin customization: edit `IR_TX_PIN` / `IR_RX_PIN` near the top of `main/app_driver.cpp`.
+Pin customization: edit `IR_TX_PIN` / `IR_RX_PIN` near the top of `main/app_driver.cpp`. SHT30 I2C pins are under **SHT30 Temperature / Humidity Sensor** in menuconfig (defaults GPIO5/GPIO6).
 
 ## Setup and Usage
 
@@ -93,6 +106,7 @@ Hold the button ~5 seconds (LED blinks fast), then release. This erases IR pairi
 ## Architecture
 
 - **Matter / app logic:** `main/app_driver.cpp`, `main/app_main.cpp`
+- **SHT30 driver:** `main/drivers/sht30.*` (I2C single-shot, CRC-checked)
 - **IR component:** `components/ir_ac`
   - ESP-IDF RMT transmit/receive
   - IRremoteESP8266 `IRac` for AC encode/decode (built with `UNIT_TEST` + `SWIGLIB` so timings are generated in software and sent via RMT)
@@ -102,7 +116,7 @@ Supported protocols: see [SupportedProtocols.md](https://github.com/crankyoldgit
 
 ## Matter limitations
 
-Matter HVAC mapping is still limited compared with a full AC remote. This firmware currently focuses on Cooling/Heating, integer °C setpoints, and Low/Medium/High fan mapping from percentage, same as the previous release.
+Matter HVAC mapping is still limited compared with a full AC remote. This firmware currently focuses on Cooling/Heating, integer °C setpoints, and Low/Medium/High fan mapping from percentage, same as the previous release. With an SHT30 connected, room temperature and humidity are exposed to the controller; without it, LocalTemperature continues to mirror the commanded setpoint.
 
 ## License
 

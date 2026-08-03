@@ -18,8 +18,8 @@ CONFIG_PARTITION_TABLE_OFFSET=0xC000
 # Enable chip shell
 CONFIG_ENABLE_CHIP_SHELL=y
 
-# This example only use 2 dynamic endpoints
-CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=2
+# This example uses 3 dynamic endpoints: Room AC + Fan + Humidity Sensor
+CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=3
 
 #enable lwIP route hooks
 CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
@@ -43,3 +43,7 @@ CONFIG_MBEDTLS_HKDF_C=y
 # Increase LwIP IPv6 address number to 6 (MAX_FABRIC + 1)
 # unique local addresses for fabrics(MAX_FABRIC), a link local address(1)
 CONFIG_LWIP_IPV6_NUM_ADDRESSES=6
+
+# SHT30 defaults for ESP32-C3 (override in menuconfig if needed)
+CONFIG_SHT30_I2C_SDA_PIN=5
+CONFIG_SHT30_I2C_SCL_PIN=6

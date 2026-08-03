@@ -1,0 +1,26 @@
+menu "SHT30 Temperature / Humidity Sensor"
+
+    config SHT30_I2C_SDA_PIN
+        int "SHT30 I2C SDA GPIO"
+        range 0 48
+        default 5
+        help
+            GPIO used for SHT30 SDA. Default 5 avoids IR TX/RX and the status LED
+            on ESP32-C3 Super Mini boards.
+
+    config SHT30_I2C_SCL_PIN
+        int "SHT30 I2C SCL GPIO"
+        range 0 48
+        default 6
+        help
+            GPIO used for SHT30 SCL. Default 6 avoids IR TX/RX and the status LED
+            on ESP32-C3 Super Mini boards.
+
+    config SHT30_I2C_ADDR_VDD
+        bool "SHT30 I2C address 0x45 (ADDR tied to VDD)"
+        default n
+        help
+            By default ADDR is assumed low (0x44). Enable this if the module
+            ADDR pin is tied to VDD (0x45).
+
+endmenu

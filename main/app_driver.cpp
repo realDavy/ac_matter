@@ -37,6 +37,22 @@ extern uint16_t room_air_conditioner_endpoint_id;
 extern uint16_t fan_endpoint_id;
 static const char *TAG_IR = "ir_ac_matter";
 
+/*
+ * When an ambient temperature sensor (SHT30) is active, LocalTemperature
+ * reports measured room temperature and must not be mirrored from setpoints.
+ */
+static std::atomic<bool> s_ambient_sensor_active{false};
+
+void app_driver_set_ambient_sensor_active(bool active)
+{
+    s_ambient_sensor_active.store(active);
+}
+
+bool app_driver_ambient_sensor_active(void)
+{
+    return s_ambient_sensor_active.load();
+}
+
 // ESP32-C3 IR pins (plain 940nm IR LED + TSOP-style receiver).
 // TX drives the IR LED (via transistor recommended). RX is the demodulator OUT.
 static constexpr gpio_num_t IR_TX_PIN = GPIO_NUM_4;
@@ -819,13 +835,20 @@ static esp_err_t app_matter_report_all_temperatures_now(
         }
     }
 
-    esp_err_t local_err =
-        app_matter_update_display_temperature(
-            temp_x100);
+    /*
+     * Only mirror the setpoint into LocalTemperature when no ambient
+     * sensor is available. With SHT30 active, LocalTemperature is the
+     * measured room temperature.
+     */
+    if (!app_driver_ambient_sensor_active()) {
+        esp_err_t local_err =
+            app_matter_update_display_temperature(
+                temp_x100);
 
-    if (local_err != ESP_OK &&
-        first_error == ESP_OK) {
-        first_error = local_err;
+        if (local_err != ESP_OK &&
+            first_error == ESP_OK) {
+            first_error = local_err;
+        }
     }
 
     return first_error;
@@ -1144,20 +1167,27 @@ static void app_matter_apply_parsed_ac_state_now(
                     OccupiedHeatingSetpoint::Id,
                 &setpoint_val));
 
-        esp_matter_attr_val_t local_temp =
-            esp_matter_invalid(nullptr);
-        local_temp.type =
-            ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
-        local_temp.val.i16 = temp_x100;
+        /*
+         * Without an ambient sensor, LocalTemperature was historically
+         * mirrored from the AC setpoint so controllers still show a value.
+         * With SHT30 active, leave LocalTemperature to the sensor path.
+         */
+        if (!app_driver_ambient_sensor_active()) {
+            esp_matter_attr_val_t local_temp =
+                esp_matter_invalid(nullptr);
+            local_temp.type =
+                ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+            local_temp.val.i16 = temp_x100;
 
-        app_matter_log_update_error(
-            "LocalTemperature",
-            attribute::update(
-                room_air_conditioner_endpoint_id,
-                Thermostat::Id,
-                Thermostat::Attributes::
-                    LocalTemperature::Id,
-                &local_temp));
+            app_matter_log_update_error(
+                "LocalTemperature",
+                attribute::update(
+                    room_air_conditioner_endpoint_id,
+                    Thermostat::Id,
+                    Thermostat::Attributes::
+                        LocalTemperature::Id,
+                    &local_temp));
+        }
     }
 
     const uint8_t matter_fan_mode =
@@ -2282,10 +2312,9 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                          raw_temp, (float)rounded_temp / 100.0);
                 
 			    /*
-			     * After the current write completes, synchronize:
-			     * CoolingSetpoint
-			     * HeatingSetpoint
-			     * LocalTemperature
+			     * After the current write completes, synchronize cooling
+			     * and heating setpoints. LocalTemperature is only mirrored
+			     * from the setpoint when no ambient sensor is present.
 			     */
 			    app_matter_schedule_report_all_temperatures(rounded_temp);
 
