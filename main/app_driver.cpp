@@ -19,9 +19,8 @@
 
 #include <app_priv.h>
 #include <device.h>
-#include <bc7215ac.hpp>
+#include <ir_ac_controller.hpp>
 #include <driver/gpio.h>
-#include <driver/uart.h>
 #include <esp_timer.h> // ESP software timer API
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -36,15 +35,12 @@ using namespace esp_matter;
 static const char *TAG = "app_driver";
 extern uint16_t room_air_conditioner_endpoint_id;
 extern uint16_t fan_endpoint_id;
-static const char *TAG_BC7215 = "bc7215_matter";
+static const char *TAG_IR = "ir_ac_matter";
 
-// ESP32-C3 test pins.
-// Note: constructor parameter order is uart, rx, tx, busy, mod.
-static constexpr uart_port_t BC7215_UART_NUM = UART_NUM_1;
-static constexpr gpio_num_t BC7215_RX_PIN = GPIO_NUM_3;
-static constexpr gpio_num_t BC7215_TX_PIN = GPIO_NUM_4;
-static constexpr gpio_num_t BC7215_BUSY_PIN = GPIO_NUM_5;
-static constexpr gpio_num_t BC7215_MOD_PIN = GPIO_NUM_6;
+// ESP32-C3 IR pins (plain 940nm IR LED + TSOP-style receiver).
+// TX drives the IR LED (via transistor recommended). RX is the demodulator OUT.
+static constexpr gpio_num_t IR_TX_PIN = GPIO_NUM_4;
+static constexpr gpio_num_t IR_RX_PIN = GPIO_NUM_3;
 
 static constexpr gpio_num_t SUPER_MINI_LED_GPIO = GPIO_NUM_8;
 static constexpr bool SUPER_MINI_LED_ACTIVE_LOW = true;
@@ -58,7 +54,7 @@ static constexpr bool SUPER_MINI_LED_ACTIVE_LOW = true;
  *      display is restored automatically.
  *
  * All GPIO writes are performed by one FreeRTOS task. This avoids races
- * between Matter callbacks, the BC7215 worker and button callbacks.
+ * between Matter callbacks, the IR worker and button callbacks.
  */
 
 enum class led_normal_type_t : uint8_t {
@@ -472,42 +468,40 @@ void app_driver_led_set_mode(led_display_mode_t mode)
 }
 
 
-static std::unique_ptr<bc7215::BC7215AC> s_ac;
+static std::unique_ptr<ir_ac::IrAcController> s_ac;
 static bool s_matter_syncing_from_local = false;
 static int16_t s_target_temperature_x100 = 2200;
-static bool s_bc7215_library_unit_celsius = true;
-
-static TaskHandle_t s_bc7215_worker_task_handle = nullptr;
+static TaskHandle_t s_ir_worker_task_handle = nullptr;
 static TaskHandle_t s_factory_reset_task_handle = nullptr;
-static QueueHandle_t s_bc7215_command_queue = nullptr;
+static QueueHandle_t s_ir_command_queue = nullptr;
 
 static std::atomic_bool s_factory_reset_armed{false};
 static std::atomic_bool s_factory_reset_in_progress{false};
-static std::atomic_bool s_bc7215_pairing{false};
-static std::atomic_bool s_bc7215_paired{false};
+static std::atomic_bool s_ir_pairing{false};
+static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
-static std::atomic_bool s_bc7215_last_clear_success{false};
-static std::atomic_bool s_bc7215_alt_traversal_active{false};
+static std::atomic_bool s_ir_last_clear_success{false};
+static std::atomic_bool s_ir_alt_traversal_active{false};
 
-enum class bc7215_alt_phase_t : uint8_t {
+enum class ir_alt_phase_t : uint8_t {
     INACTIVE,
     MATCH_NEXT,
     PREDEFINED,
 };
 
-static bc7215_alt_phase_t s_bc7215_alt_phase =
-    bc7215_alt_phase_t::INACTIVE;
-static uint8_t s_bc7215_match_index = 0;
-static uint8_t s_bc7215_alt_predefined_number = 0;
+static ir_alt_phase_t s_ir_alt_phase =
+    ir_alt_phase_t::INACTIVE;
+static uint8_t s_ir_match_index = 0;
+static uint8_t s_ir_alt_predefined_number = 0;
 
-enum class bc7215_worker_state_t : uint8_t {
+enum class ir_worker_state_t : uint8_t {
     STOPPED,
     IDLE,
     PARSING,
     PAIRING,
 };
 
-enum class bc7215_command_type_t : uint8_t {
+enum class ir_command_type_t : uint8_t {
     SEND_POWER,
     SEND_STATE,
     TOGGLE_PAIRING,
@@ -515,9 +509,9 @@ enum class bc7215_command_type_t : uint8_t {
     CLEAR_PAIRING,
 };
 
-struct bc7215_command_t {
-    bc7215_command_type_t type =
-        bc7215_command_type_t::SEND_STATE;
+struct ir_command_t {
+    ir_command_type_t type =
+        ir_command_type_t::SEND_STATE;
 
     int temp = 25;
     int mode = 1;
@@ -527,13 +521,13 @@ struct bc7215_command_t {
 
     /*
      * Used only by CLEAR_PAIRING. The worker notifies this task after the
-     * BC7215 runtime state and saved pairing record have both been cleared.
+     * IR runtime state and saved pairing record have both been cleared.
      */
     TaskHandle_t completion_task = nullptr;
 };
 
-static bc7215_worker_state_t s_bc7215_worker_state =
-    bc7215_worker_state_t::STOPPED;
+static ir_worker_state_t s_ir_worker_state =
+    ir_worker_state_t::STOPPED;
 
 static int Temp = 25;
 static int Mode = 1;
@@ -546,11 +540,11 @@ static bool PowerOn = false;
  * FanMode Off and PercentSetting 0% are treated as whole-appliance power-off
  * commands. Non-zero percentages are normalized to 25%, 50% or 100%.
  */
-static uint8_t app_driver_bc7215_fan_to_matter(
+static uint8_t app_driver_ir_fan_to_matter(
     int fan,
     bool power_on);
 
-static uint8_t app_driver_bc7215_fan_to_percent(
+static uint8_t app_driver_ir_fan_to_percent(
     int fan,
     bool power_on);
 
@@ -560,117 +554,115 @@ static void app_matter_schedule_whole_device_state(
     int fan);
 
 /*
- * Storage for BC7215 air-conditioner protocol pairing data.
+ * Storage for IR air-conditioner protocol pairing data.
  *
  * NVS already performs integrity checks on storage pages. The additional
  * magic, version and size fields prevent old data from being used after
  * firmware updates change the structure layout.
  */
-static constexpr char BC7215_NVS_NAMESPACE[] = "bc7215_ac";
-static constexpr char BC7215_NVS_PAIRING_KEY[] = "pairing";
-static constexpr uint32_t BC7215_PAIRING_MAGIC = 0x42433732; // "BC72"
-static constexpr uint16_t BC7215_PAIRING_VERSION = 1;
+static constexpr char IR_NVS_NAMESPACE[] = "ir_ac";
+static constexpr char IR_NVS_PAIRING_KEY[] = "pairing";
+static constexpr uint32_t IR_PAIRING_MAGIC = 0x49524143; // "IRAC"
+static constexpr uint16_t IR_PAIRING_VERSION = 1;
 
-struct bc7215_stored_pairing_data_t {
+struct ir_stored_pairing_data_t {
     uint32_t magic;
     uint16_t version;
     uint16_t struct_size;
-    uint8_t status;
-    uint8_t library_unit_celsius;
-    uint8_t match_index;
+    int32_t protocol;
+    int16_t model;
+    uint8_t alt_index;
     uint8_t reserved;
-    bc7215DataMaxPkt_t data;
-    bc7215FormatPkt_t format;
 };
 
 
 /*
- * Queue a command for the single BC7215 worker.
+ * Queue a command for the single IR worker.
  *
- * After the worker has started, no other task may directly call BC7215AC
+ * After the worker has started, no other task may directly call IrAcController
  * capture, parsing, pairing or transmit methods.
  */
-static esp_err_t app_driver_bc7215_enqueue_command(
-    const bc7215_command_t &command,
+static esp_err_t app_driver_ir_enqueue_command(
+    const ir_command_t &command,
     TickType_t timeout = pdMS_TO_TICKS(50))
 {
-    if (s_bc7215_command_queue == nullptr) {
+    if (s_ir_command_queue == nullptr) {
         ESP_LOGE(
-            TAG_BC7215,
-            "BC7215 worker command queue is unavailable");
+            TAG_IR,
+            "IR worker command queue is unavailable");
         return ESP_ERR_INVALID_STATE;
     }
 
     if (xQueueSend(
-            s_bc7215_command_queue,
+            s_ir_command_queue,
             &command,
             timeout) != pdTRUE) {
 
         ESP_LOGE(
-            TAG_BC7215,
-            "BC7215 worker command queue is full");
+            TAG_IR,
+            "IR worker command queue is full");
         return ESP_ERR_TIMEOUT;
     }
 
     return ESP_OK;
 }
 
-static esp_err_t app_driver_bc7215_queue_power(
+static esp_err_t app_driver_ir_queue_power(
     bool power_on)
 {
-    bc7215_command_t command{};
+    ir_command_t command{};
     command.type =
-        bc7215_command_type_t::SEND_POWER;
+        ir_command_type_t::SEND_POWER;
     command.power_on = power_on;
 
-    return app_driver_bc7215_enqueue_command(
+    return app_driver_ir_enqueue_command(
         command);
 }
 
-static esp_err_t app_driver_bc7215_queue_state(
+static esp_err_t app_driver_ir_queue_state(
     int temp,
     int mode,
     int fan,
     int key,
     bool power_on)
 {
-    bc7215_command_t command{};
+    ir_command_t command{};
     command.type =
-        bc7215_command_type_t::SEND_STATE;
+        ir_command_type_t::SEND_STATE;
     command.temp = temp;
     command.mode = mode;
     command.fan = fan;
     command.key = key;
     command.power_on = power_on;
 
-    return app_driver_bc7215_enqueue_command(
+    return app_driver_ir_enqueue_command(
         command);
 }
 
-static esp_err_t app_driver_bc7215_queue_pairing_toggle()
+static esp_err_t app_driver_ir_queue_pairing_toggle()
 {
-    bc7215_command_t command{};
+    ir_command_t command{};
     command.type =
-        bc7215_command_type_t::TOGGLE_PAIRING;
+        ir_command_type_t::TOGGLE_PAIRING;
 
-    return app_driver_bc7215_enqueue_command(
+    return app_driver_ir_enqueue_command(
         command);
 }
 
-static esp_err_t app_driver_bc7215_queue_alt_next()
+static esp_err_t app_driver_ir_queue_alt_next()
 {
-    bc7215_command_t command{};
+    ir_command_t command{};
     command.type =
-        bc7215_command_type_t::ALT_NEXT;
+        ir_command_type_t::ALT_NEXT;
 
-    return app_driver_bc7215_enqueue_command(
+    return app_driver_ir_enqueue_command(
         command);
 }
 
 
 /*
  * Called by the Matter subscription callback.
- * The BC7215 worker starts/stops parsing RX according to this flag.
+ * The IR worker starts/stops parsing RX according to this flag.
  */
 void app_driver_set_subscription_active(bool active)
 {
@@ -678,7 +670,7 @@ void app_driver_set_subscription_active(bool active)
         s_matter_subscription_active.exchange(active);
 
     if (previous != active) {
-        ESP_LOGI(TAG_BC7215,
+        ESP_LOGI(TAG_IR,
                  "Matter subscription state: %s",
                  active ? "active" : "inactive");
     }
@@ -700,7 +692,7 @@ static void app_driver_log_current_ac_state(const char *source)
 static esp_err_t app_driver_room_air_conditioner_set_power(
     esp_matter_attr_val_t *val)
 {
-    if (!s_bc7215_alt_traversal_active.load()) {
+    if (!s_ir_alt_traversal_active.load()) {
         app_driver_led_set_mode(
             ONE_SHOT_ON_1S);
     }
@@ -711,12 +703,12 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
 
     if (!s_factory_reset_in_progress.load()) {
         queue_err =
-            app_driver_bc7215_queue_power(
+            app_driver_ir_queue_power(
                 PowerOn);
 
         if (queue_err != ESP_OK) {
             ESP_LOGE(
-                TAG_BC7215,
+                TAG_IR,
                 "Failed to queue Room AC power command: %s",
                 esp_err_to_name(queue_err));
         }
@@ -744,7 +736,7 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
         "RoomAC OnOff");
 
     /*
-     * The LED is dedicated to displaying the BC7215 pairing state:
+     * The LED is dedicated to displaying the IR pairing state:
      *   Unpaired       -> LED_MODE_BLINK_1HZ
      *   Pairing        -> LED_MODE_BLINK_3HZ
      *   Pairing complete -> LED_MODE_BREATH_3S
@@ -861,7 +853,7 @@ static void app_matter_schedule_report_all_temperatures(
 }
 
 
-static uint8_t app_driver_bc7215_mode_to_matter(int mode)
+static uint8_t app_driver_ir_mode_to_matter(int mode)
 {
     switch (mode) {
         case 0: return 1; // Auto
@@ -873,7 +865,7 @@ static uint8_t app_driver_bc7215_mode_to_matter(int mode)
     }
 }
 
-static uint8_t app_driver_bc7215_fan_to_matter(int fan, bool power_on)
+static uint8_t app_driver_ir_fan_to_matter(int fan, bool power_on)
 {
     if (!power_on) {
         return 0; // Off
@@ -888,7 +880,7 @@ static uint8_t app_driver_bc7215_fan_to_matter(int fan, bool power_on)
     }
 }
 
-static uint8_t app_driver_bc7215_fan_to_percent(int fan, bool power_on)
+static uint8_t app_driver_ir_fan_to_percent(int fan, bool power_on)
 {
     if (!power_on) {
         return 0;
@@ -908,7 +900,7 @@ static uint8_t app_driver_bc7215_fan_to_percent(int fan, bool power_on)
     }
 }
 
-static int app_driver_percent_to_bc7215_fan(uint8_t percent)
+static int app_driver_percent_to_ir_fan(uint8_t percent)
 {
     /*
      * PercentSetting=0% is handled as whole-appliance Off before this helper
@@ -1003,7 +995,7 @@ static void app_matter_update_fan_endpoint_state_now(
  * power/mode/fan state. This must run on the CHIP thread.
  *
  * PowerOn is kept separate from Mode. Therefore an Off command does not erase
- * the last active BC7215 mode, and a later Fan-originated On command can
+ * the last active IR mode, and a later Fan-originated On command can
  * restore Thermostat::SystemMode correctly.
  */
 static void app_matter_update_whole_device_state_now(
@@ -1029,7 +1021,7 @@ static void app_matter_update_whole_device_state_now(
 
     const uint8_t matter_system_mode =
         power_on
-            ? app_driver_bc7215_mode_to_matter(mode)
+            ? app_driver_ir_mode_to_matter(mode)
             : static_cast<uint8_t>(
                   Thermostat::SystemModeEnum::kOff);
 
@@ -1045,12 +1037,12 @@ static void app_matter_update_whole_device_state_now(
             &system_mode_val));
 
     const uint8_t matter_fan_mode =
-        app_driver_bc7215_fan_to_matter(
+        app_driver_ir_fan_to_matter(
             fan,
             power_on);
 
     const uint8_t fan_percent =
-        app_driver_bc7215_fan_to_percent(
+        app_driver_ir_fan_to_percent(
             fan,
             power_on);
 
@@ -1112,7 +1104,7 @@ static void app_matter_apply_parsed_ac_state_now(
 
     const uint8_t matter_system_mode =
         power_on
-            ? app_driver_bc7215_mode_to_matter(mode)
+            ? app_driver_ir_mode_to_matter(mode)
             : 0;
 
     esp_matter_attr_val_t system_mode_val =
@@ -1169,12 +1161,12 @@ static void app_matter_apply_parsed_ac_state_now(
     }
 
     const uint8_t matter_fan_mode =
-        app_driver_bc7215_fan_to_matter(
+        app_driver_ir_fan_to_matter(
             fan,
             power_on);
 
     const uint8_t fan_percent =
-        app_driver_bc7215_fan_to_percent(
+        app_driver_ir_fan_to_percent(
             fan,
             power_on);
 
@@ -1215,34 +1207,19 @@ static void app_matter_schedule_parsed_ac_state(
 }
 
 /*
- * Convert the BC7215 library temperature to the Celsius value required by
- * Matter. Invalid parsed temperatures leave the previous temperature intact.
+ * Validate a decoded Celsius temperature. Invalid values leave the previous
+ * temperature intact.
  */
-static int app_driver_bc7215_temperature_to_celsius(int parsed_temp)
+static int app_driver_ir_temperature_to_celsius(int parsed_temp)
 {
-    if (s_bc7215_library_unit_celsius) {
-        return (parsed_temp >= 16 &&
-                parsed_temp <= 30)
-            ? parsed_temp
-            : Temp;
-    }
-
-    if (parsed_temp < 60 || parsed_temp > 88) {
-        return Temp;
-    }
-
-    return static_cast<int>(
-        std::lround(
-            (static_cast<float>(parsed_temp) - 32.0f)
-            * 5.0f / 9.0f));
+    return (parsed_temp >= 16 && parsed_temp <= 30) ? parsed_temp : Temp;
 }
 
+static bool app_driver_ir_save_pairing();
+static bool app_driver_ir_erase_saved_pairing();
+static bool app_driver_ir_load_pairing();
 
-static bool app_driver_bc7215_save_pairing();
-static bool app_driver_bc7215_erase_saved_pairing();
-static bool app_driver_bc7215_load_pairing();
-
-static bool app_driver_bc7215_worker_wait_idle(
+static bool app_driver_ir_worker_wait_idle(
     uint32_t timeout_ms = 3000)
 {
     if (!s_ac) {
@@ -1256,578 +1233,339 @@ static bool app_driver_bc7215_worker_wait_idle(
     while (s_ac->is_busy()) {
         if (esp_timer_get_time() >= deadline_us) {
             ESP_LOGW(
-                TAG_BC7215,
-                "Timed out waiting for BC7215 to become idle");
+                TAG_IR,
+                "Timed out waiting for IR transmit to become idle");
             return false;
         }
 
-        vTaskDelay(
-            pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
     return true;
 }
 
-static void app_driver_bc7215_worker_stop_capture()
+static void app_driver_ir_worker_stop_capture()
 {
     if (!s_ac) {
         return;
     }
 
     s_ac->stop_capture();
-
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::IDLE;
+    s_ir_worker_state = ir_worker_state_t::IDLE;
 }
 
-/*
- * The Alt protocol traversal is advanced one candidate per double click.
- *
- * MATCH_NEXT candidates use short flashes:
- *   ON 100 ms, OFF 1500 ms.
- *
- * Predefined protocols use long flashes:
- *   ON 500 ms, OFF 1100 ms.
- *
- * The number of flashes is the 1-based candidate number.
- */
-static void app_driver_bc7215_alt_reset_tracking()
+static void app_driver_ir_alt_reset_tracking()
 {
-    s_bc7215_alt_traversal_active.store(false);
-    s_bc7215_alt_phase =
-        bc7215_alt_phase_t::INACTIVE;
-    s_bc7215_alt_predefined_number = 0;
+    s_ir_alt_traversal_active.store(false);
+    s_ir_alt_phase = ir_alt_phase_t::INACTIVE;
+    s_ir_alt_predefined_number = 0;
+    s_ir_match_index = 0;
 }
 
-static void app_driver_bc7215_alt_prepare_led()
+static void app_driver_ir_alt_prepare_led()
 {
     app_driver_led_cancel_one_shot();
     app_driver_led_set_static(false);
 }
 
-static void app_driver_bc7215_alt_show_match_number(
-    uint8_t number)
+static void app_driver_ir_alt_show_protocol_number(uint8_t number)
 {
-    app_driver_led_one_shot(
-        number,
-        100,
-        1500);
+    app_driver_led_one_shot(number == 0 ? 1 : number, 500, 1100);
 }
 
-static void app_driver_bc7215_alt_show_predefined_number(
-    uint8_t number)
+static void app_driver_ir_worker_accept_alt_selection()
 {
-    app_driver_led_one_shot(
-        number,
-        500,
-        1100);
-}
-
-static bool app_driver_bc7215_worker_send_alt_test_signal()
-{
-    if (!s_ac || !s_ac->init_ok) {
-        return false;
-    }
-
-    if (!app_driver_bc7215_worker_wait_idle()) {
-        return false;
-    }
-
-    const int test_temperature =
-        s_bc7215_library_unit_celsius
-            ? 25
-            : 77;
-
-    const bc7215DataVarPkt_t *packet =
-        s_ac->set_to(
-            test_temperature,
-            1,
-            0);
-
-    if (packet == nullptr) {
-        ESP_LOGE(
-            TAG_BC7215,
-            "Alt traversal test command failed");
-        return false;
-    }
-
-    Temp = 25;
-    Mode = 1;
-    Fan = 0;
-    PowerOn = true;
-
-    ESP_LOGI(
-        TAG_BC7215,
-        "Alt traversal test command sent: Cool/25C/Fan Auto");
-
-    return true;
-}
-
-static void app_driver_bc7215_worker_accept_alt_selection()
-{
-    if (!s_bc7215_alt_traversal_active.load()) {
+    if (!s_ir_alt_traversal_active.load()) {
         return;
     }
 
-    const bc7215_alt_phase_t accepted_phase =
-        s_bc7215_alt_phase;
     const uint8_t accepted_number =
-        accepted_phase ==
-                bc7215_alt_phase_t::MATCH_NEXT
-            ? s_bc7215_match_index
-            : s_bc7215_alt_predefined_number;
+        s_ir_match_index == 0 ? 1 : s_ir_match_index;
 
-    app_driver_bc7215_alt_reset_tracking();
+    app_driver_ir_alt_reset_tracking();
     app_driver_led_cancel_one_shot();
-    app_driver_led_set_mode(
-        LED_MODE_BREATH_3S);
+    app_driver_led_set_mode(LED_MODE_BREATH_3S);
 
     ESP_LOGI(
-        TAG_BC7215,
-        "Alt traversal selection accepted by Matter command: "
-        "type=%s number=%u",
-        accepted_phase ==
-                bc7215_alt_phase_t::MATCH_NEXT
-            ? "match_next"
-            : "predefined",
-        static_cast<unsigned>(
-            accepted_number));
+        TAG_IR,
+        "Alt protocol selection accepted by Matter command: index=%u protocol=%s",
+        static_cast<unsigned>(accepted_number),
+        s_ac ? s_ac->protocol_name() : "none");
 }
 
-static void app_driver_bc7215_worker_finish_alt_unpaired()
+static void app_driver_ir_worker_finish_alt_unpaired()
 {
     if (s_ac) {
         s_ac->stop_capture();
-        s_ac->init_ok = false;
+        s_ac->clear_pairing();
+        s_ac->init_ok = s_ac->ready();
     }
 
-    s_bc7215_pairing.store(false);
-    s_bc7215_paired.store(false);
-    s_bc7215_match_index = 0;
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::STOPPED;
+    s_ir_pairing.store(false);
+    s_ir_paired.store(false);
+    s_ir_match_index = 0;
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
 
-    if (!app_driver_bc7215_erase_saved_pairing()) {
-        ESP_LOGW(
-            TAG_BC7215,
-            "Alt traversal finished, but saved pairing data "
-            "could not be erased");
+    if (!app_driver_ir_erase_saved_pairing()) {
+        ESP_LOGW(TAG_IR, "Alt traversal finished, but saved pairing erase failed");
     }
 
-    app_driver_bc7215_alt_reset_tracking();
+    app_driver_ir_alt_reset_tracking();
     app_driver_led_cancel_one_shot();
     app_driver_update_led_states();
 
-    ESP_LOGI(
-        TAG_BC7215,
-        "Alt traversal completed; device returned to the unpaired state");
+    ESP_LOGI(TAG_IR, "Alt traversal completed; device returned to unpaired state");
 }
 
-static void app_driver_bc7215_worker_commit_alt_candidate(
-    const char *candidate_type,
-    uint8_t candidate_number,
-    bool predefined)
+static void app_driver_ir_worker_alt_next()
 {
-    s_bc7215_paired.store(true);
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::IDLE;
-
-    const bool test_sent =
-        app_driver_bc7215_worker_send_alt_test_signal();
-
-    const bool saved =
-        app_driver_bc7215_save_pairing();
-
-    if (predefined) {
-        app_driver_bc7215_alt_show_predefined_number(
-            candidate_number);
-    } else {
-        app_driver_bc7215_alt_show_match_number(
-            candidate_number);
-    }
-
-    ESP_LOGI(
-        TAG_BC7215,
-        "Alt traversal candidate selected: type=%s number=%u "
-        "saved=%d test_sent=%d",
-        candidate_type,
-        static_cast<unsigned>(
-            candidate_number),
-        static_cast<int>(saved),
-        static_cast<int>(test_sent));
-}
-
-static void app_driver_bc7215_worker_alt_next()
-{
-    if (!s_ac ||
-        s_factory_reset_in_progress.load()) {
-        ESP_LOGW(
-            TAG_BC7215,
-            "Alt traversal ignored: BC7215 unavailable or reset active");
+    if (!s_ac || s_factory_reset_in_progress.load()) {
+        ESP_LOGW(TAG_IR, "Alt traversal ignored: IR controller unavailable or reset active");
         return;
     }
 
-    if (s_bc7215_pairing.load()) {
+    if (s_ir_pairing.load()) {
         s_ac->stop_capture();
-        s_bc7215_pairing.store(false);
-        s_ac->init_ok = false;
-        s_bc7215_paired.store(false);
+        s_ir_pairing.store(false);
+        s_ac->clear_pairing();
+        s_ac->init_ok = s_ac->ready();
+        s_ir_paired.store(false);
     }
 
-    if (!s_bc7215_alt_traversal_active.load()) {
-        s_bc7215_alt_traversal_active.store(true);
-        s_bc7215_alt_predefined_number = 0;
-
-        s_bc7215_alt_phase =
-            s_bc7215_paired.load() &&
-                    s_ac->init_ok
-                ? bc7215_alt_phase_t::MATCH_NEXT
-                : bc7215_alt_phase_t::PREDEFINED;
-
-        if (s_bc7215_alt_phase ==
-            bc7215_alt_phase_t::PREDEFINED) {
-            s_bc7215_match_index = 0;
-        }
-
-        app_driver_bc7215_alt_prepare_led();
-
-        ESP_LOGI(
-            TAG_BC7215,
-            "Alt traversal started: first phase=%s",
-            s_bc7215_alt_phase ==
-                    bc7215_alt_phase_t::MATCH_NEXT
-                ? "match_next"
-                : "predefined");
+    if (!s_ir_alt_traversal_active.load()) {
+        s_ir_alt_traversal_active.store(true);
+        s_ir_alt_phase = ir_alt_phase_t::PREDEFINED;
+        s_ir_match_index = 0;
+        s_ir_alt_predefined_number = 0;
+        app_driver_ir_alt_prepare_led();
+        ESP_LOGI(TAG_IR, "Alt traversal started over IRremoteESP8266 AC protocols");
     } else {
-        app_driver_bc7215_alt_prepare_led();
+        app_driver_ir_alt_prepare_led();
     }
 
-    app_driver_bc7215_worker_stop_capture();
-
-    if (!app_driver_bc7215_worker_wait_idle()) {
+    app_driver_ir_worker_stop_capture();
+    if (!app_driver_ir_worker_wait_idle()) {
         return;
     }
 
-    if (s_bc7215_alt_phase ==
-        bc7215_alt_phase_t::MATCH_NEXT) {
+    const size_t count = s_ac->alt_protocol_count();
+    while (s_ir_match_index < count) {
+        const size_t index = s_ir_match_index;
+        ++s_ir_match_index;
 
-        if (s_ac->match_next()) {
-            ++s_bc7215_match_index;
-
-            app_driver_bc7215_worker_commit_alt_candidate(
-                "match_next",
-                s_bc7215_match_index,
-                false);
-            return;
-        }
-
-        s_bc7215_alt_phase =
-            bc7215_alt_phase_t::PREDEFINED;
-        s_bc7215_match_index = 0;
-        s_bc7215_alt_predefined_number = 0;
-
-        ESP_LOGI(
-            TAG_BC7215,
-            "No more match_next candidates; switching to "
-            "predefined protocols");
-    }
-
-    const uint8_t predefined_count =
-        s_ac->predefined_count();
-
-    while (s_bc7215_alt_predefined_number <
-           predefined_count) {
-
-        const uint8_t predefined_index =
-            s_bc7215_alt_predefined_number;
-
-        ++s_bc7215_alt_predefined_number;
-
-        if (!s_ac->init_predefined(
-                predefined_index)) {
-
-            ESP_LOGW(
-                TAG_BC7215,
-                "Failed to initialize predefined protocol %u",
-                static_cast<unsigned>(
-                    s_bc7215_alt_predefined_number));
+        if (!s_ac->apply_alt_index(index)) {
+            ESP_LOGW(TAG_IR, "Failed to apply alt protocol index %u",
+                     static_cast<unsigned>(index + 1));
             continue;
         }
 
-        app_driver_bc7215_worker_commit_alt_candidate(
-            "predefined",
-            s_bc7215_alt_predefined_number,
-            true);
+        s_ir_paired.store(true);
+        s_ac->init_ok = true;
+        s_ir_worker_state = ir_worker_state_t::IDLE;
+
+        Temp = 25;
+        Mode = 1;
+        Fan = 0;
+        PowerOn = true;
+
+        const bool saved = app_driver_ir_save_pairing();
+        app_driver_ir_alt_show_protocol_number(static_cast<uint8_t>(index + 1));
+
+        ESP_LOGI(TAG_IR,
+                 "Alt protocol candidate %u/%u selected: %s saved=%d",
+                 static_cast<unsigned>(index + 1),
+                 static_cast<unsigned>(count),
+                 s_ac->protocol_name(),
+                 static_cast<int>(saved));
         return;
     }
 
-    app_driver_bc7215_worker_finish_alt_unpaired();
+    app_driver_ir_worker_finish_alt_unpaired();
 }
 
-static void app_driver_bc7215_worker_send_power(
-    const bc7215_command_t &command)
+static void app_driver_ir_worker_send_power(const ir_command_t &command)
 {
-    if (!s_ac ||
-        !s_ac->init_ok ||
-        s_bc7215_pairing.load() ||
-        s_factory_reset_in_progress.load()) {
-
-        ESP_LOGW(
-            TAG_BC7215,
-            "Power command ignored: ready=%d paired=%d pairing=%d reset=%d",
-            s_ac != nullptr,
-            s_bc7215_paired.load(),
-            s_bc7215_pairing.load(),
-            s_factory_reset_in_progress.load());
+    if (!s_ac || !s_ac->init_ok || !s_ir_paired.load() ||
+        s_ir_pairing.load() || s_factory_reset_in_progress.load()) {
+        ESP_LOGW(TAG_IR,
+                 "Power command ignored: ready=%d paired=%d pairing=%d reset=%d",
+                 s_ac != nullptr && s_ac->ready(),
+                 s_ir_paired.load(),
+                 s_ir_pairing.load(),
+                 s_factory_reset_in_progress.load());
         return;
     }
 
-    app_driver_bc7215_worker_accept_alt_selection();
-    app_driver_bc7215_worker_stop_capture();
-
-    if (!app_driver_bc7215_worker_wait_idle()) {
+    app_driver_ir_worker_accept_alt_selection();
+    app_driver_ir_worker_stop_capture();
+    if (!app_driver_ir_worker_wait_idle()) {
         return;
     }
 
-    const bc7215DataVarPkt_t *packet =
-        command.power_on
-            ? s_ac->on()
-            : s_ac->off();
-
-    if (packet == nullptr) {
-        ESP_LOGE(
-            TAG_BC7215,
-            "BC7215 power command failed: Power=%d",
-            static_cast<int>(
-                command.power_on));
+    if (!s_ac->send_power(command.power_on)) {
+        ESP_LOGE(TAG_IR, "IR power command failed: Power=%d",
+                 static_cast<int>(command.power_on));
     } else {
-        ESP_LOGI(
-            TAG_BC7215,
-            "BC7215 power command submitted: Power=%d",
-            static_cast<int>(
-                command.power_on));
+        ESP_LOGI(TAG_IR, "IR power command submitted: Power=%d",
+                 static_cast<int>(command.power_on));
     }
 
-    /*
-     * Match ESPHome's send_current_state_(): after transmit, return the
-     * receive state machine to IDLE. The worker will not re-arm capture until
-     * BUSY becomes inactive.
-     */
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::IDLE;
+    s_ir_worker_state = ir_worker_state_t::IDLE;
 }
 
-static void app_driver_bc7215_worker_send_state(
-    const bc7215_command_t &command)
+static void app_driver_ir_worker_send_state(const ir_command_t &command)
 {
-    if (!s_ac ||
-        !s_ac->init_ok ||
-        s_bc7215_pairing.load() ||
-        s_factory_reset_in_progress.load()) {
-
-        ESP_LOGW(
-            TAG_BC7215,
-            "State command ignored: ready=%d paired=%d pairing=%d reset=%d",
-            s_ac != nullptr,
-            s_bc7215_paired.load(),
-            s_bc7215_pairing.load(),
-            s_factory_reset_in_progress.load());
+    if (!s_ac || !s_ac->init_ok || !s_ir_paired.load() ||
+        s_ir_pairing.load() || s_factory_reset_in_progress.load()) {
+        ESP_LOGW(TAG_IR,
+                 "State command ignored: ready=%d paired=%d pairing=%d reset=%d",
+                 s_ac != nullptr && s_ac->ready(),
+                 s_ir_paired.load(),
+                 s_ir_pairing.load(),
+                 s_factory_reset_in_progress.load());
         return;
     }
 
-    app_driver_bc7215_worker_accept_alt_selection();
-    app_driver_bc7215_worker_stop_capture();
-
-    if (!app_driver_bc7215_worker_wait_idle()) {
+    app_driver_ir_worker_accept_alt_selection();
+    app_driver_ir_worker_stop_capture();
+    if (!app_driver_ir_worker_wait_idle()) {
         return;
     }
 
-    const bc7215DataVarPkt_t *packet =
-        s_ac->set_to(
-            command.temp,
-            command.mode,
-            command.fan,
-            command.key);
+    ir_ac::AcLogicalState state{};
+    state.temp_c = command.temp;
+    state.mode = command.mode;
+    state.fan = command.fan;
+    state.power = command.power_on;
 
-    if (packet == nullptr) {
-        ESP_LOGE(
-            TAG_BC7215,
-            "BC7215 state command failed: "
-            "Temp=%d Mode=%d Fan=%d Key=%d Power=%d",
-            command.temp,
-            command.mode,
-            command.fan,
-            command.key,
-            static_cast<int>(
-                command.power_on));
+    if (!s_ac->send_state(state)) {
+        ESP_LOGE(TAG_IR,
+                 "IR state command failed: Temp=%d Mode=%d Fan=%d Key=%d Power=%d",
+                 command.temp, command.mode, command.fan, command.key,
+                 static_cast<int>(command.power_on));
     } else {
-        ESP_LOGI(
-            TAG_BC7215,
-            "BC7215 state command submitted: "
-            "Temp=%d Mode=%d Fan=%d Key=%d Power=%d",
-            command.temp,
-            command.mode,
-            command.fan,
-            command.key,
-            static_cast<int>(
-                command.power_on));
+        ESP_LOGI(TAG_IR,
+                 "IR state command submitted: Temp=%d Mode=%d Fan=%d Key=%d Power=%d",
+                 command.temp, command.mode, command.fan, command.key,
+                 static_cast<int>(command.power_on));
     }
 
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::IDLE;
+    s_ir_worker_state = ir_worker_state_t::IDLE;
 }
 
-static void app_driver_bc7215_worker_start_pairing()
+static void app_driver_ir_worker_start_pairing()
 {
-    if (!s_ac ||
-        s_factory_reset_in_progress.load()) {
+    if (!s_ac || s_factory_reset_in_progress.load()) {
         return;
     }
 
-    if (s_bc7215_alt_traversal_active.load()) {
-        app_driver_bc7215_alt_reset_tracking();
+    if (s_ir_alt_traversal_active.load()) {
+        app_driver_ir_alt_reset_tracking();
         app_driver_led_cancel_one_shot();
     }
 
-    app_driver_bc7215_worker_stop_capture();
-
-    if (!app_driver_bc7215_worker_wait_idle()) {
-        ESP_LOGE(
-            TAG_BC7215,
-            "Cannot start pairing while BC7215 remains busy");
+    app_driver_ir_worker_stop_capture();
+    if (!app_driver_ir_worker_wait_idle()) {
+        ESP_LOGE(TAG_IR, "Cannot start pairing while IR transmit remains busy");
         return;
     }
 
-    s_ac->init_ok = false;
-    s_bc7215_paired.store(false);
-    s_bc7215_match_index = 0;
-    s_bc7215_pairing.store(true);
+    s_ac->clear_pairing();
+    s_ac->init_ok = s_ac->ready();
+    s_ir_paired.store(false);
+    s_ir_match_index = 0;
+    s_ir_pairing.store(true);
+    s_ac->start_capture();
+    s_ir_worker_state = ir_worker_state_t::PAIRING;
 
-    s_ac->start_capture(1);
-
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::PAIRING;
-
-    ESP_LOGI(
-        TAG_BC7215,
-        "Pairing started. Set the remote to Cool/25C and press Fan.");
-
-    app_driver_led_set_mode(
-        LED_MODE_BLINK_3HZ);
+    ESP_LOGI(TAG_IR,
+             "Pairing started. Point the AC remote at the IR receiver and press any button.");
+    app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
 }
 
-static void app_driver_bc7215_worker_cancel_pairing()
+static void app_driver_ir_worker_cancel_pairing()
 {
-    if (!s_ac ||
-        !s_bc7215_pairing.load()) {
+    if (!s_ac || !s_ir_pairing.load()) {
         return;
     }
 
-    if (s_bc7215_worker_state ==
-        bc7215_worker_state_t::PAIRING) {
-
+    if (s_ir_worker_state == ir_worker_state_t::PAIRING) {
         s_ac->stop_capture();
     }
 
-    s_ac->init_ok = false;
-    s_bc7215_pairing.store(false);
+    s_ac->clear_pairing();
+    s_ac->init_ok = s_ac->ready();
+    s_ir_pairing.store(false);
 
-    const bool pairing_restored =
-        app_driver_bc7215_load_pairing();
+    const bool pairing_restored = app_driver_ir_load_pairing();
+    s_ir_paired.store(pairing_restored);
+    s_ir_worker_state =
+        pairing_restored ? ir_worker_state_t::IDLE : ir_worker_state_t::STOPPED;
 
-    s_bc7215_paired.store(
-        pairing_restored);
-
-    s_bc7215_worker_state =
-        pairing_restored
-            ? bc7215_worker_state_t::IDLE
-            : bc7215_worker_state_t::STOPPED;
-
-    ESP_LOGI(
-        TAG_BC7215,
-        "BC7215 pairing cancelled; load_pairing result: %s",
-        pairing_restored
-            ? "paired"
-            : "unpaired");
-
+    ESP_LOGI(TAG_IR, "IR pairing cancelled; load_pairing result: %s",
+             pairing_restored ? "restored" : "unpaired");
     app_driver_update_led_states();
 }
 
-static void app_driver_bc7215_worker_toggle_pairing()
+static void app_driver_ir_worker_toggle_pairing()
 {
-    if (s_bc7215_pairing.load()) {
-        app_driver_bc7215_worker_cancel_pairing();
+    if (s_ir_pairing.load()) {
+        app_driver_ir_worker_cancel_pairing();
     } else {
-        app_driver_bc7215_worker_start_pairing();
+        app_driver_ir_worker_start_pairing();
     }
 }
 
-static void app_driver_bc7215_worker_clear_pairing(
-    const bc7215_command_t &command)
+static void app_driver_ir_worker_clear_pairing(const ir_command_t &command)
 {
-    app_driver_bc7215_alt_reset_tracking();
-    app_driver_led_cancel_one_shot();
+    app_driver_ir_alt_reset_tracking();
 
     if (s_ac) {
-        app_driver_bc7215_worker_stop_capture();
-        app_driver_bc7215_worker_wait_idle();
-        s_ac->init_ok = false;
+        app_driver_ir_worker_stop_capture();
+        app_driver_ir_worker_wait_idle();
+        s_ac->clear_pairing();
+        s_ac->init_ok = s_ac->ready();
     }
 
-    s_bc7215_pairing.store(false);
-    s_bc7215_paired.store(false);
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::STOPPED;
+    s_ir_pairing.store(false);
+    s_ir_paired.store(false);
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
 
-    const bool erased =
-        app_driver_bc7215_erase_saved_pairing();
-
-    s_bc7215_last_clear_success.store(
-        erased);
-
-    app_driver_update_led_states();
+    const bool erased = app_driver_ir_erase_saved_pairing();
+    s_ir_last_clear_success.store(erased);
 
     if (command.completion_task != nullptr) {
-        xTaskNotifyGive(
-            command.completion_task);
+        xTaskNotifyGive(command.completion_task);
     }
+
+    app_driver_update_led_states();
 }
 
-static void app_driver_bc7215_worker_process_command(
-    const bc7215_command_t &command)
+static void app_driver_ir_worker_process_command(const ir_command_t &command)
 {
     switch (command.type) {
-        case bc7215_command_type_t::SEND_POWER:
-            app_driver_bc7215_worker_send_power(
-                command);
+        case ir_command_type_t::SEND_POWER:
+            app_driver_ir_worker_send_power(command);
             break;
-
-        case bc7215_command_type_t::SEND_STATE:
-            app_driver_bc7215_worker_send_state(
-                command);
+        case ir_command_type_t::SEND_STATE:
+            app_driver_ir_worker_send_state(command);
             break;
-
-        case bc7215_command_type_t::TOGGLE_PAIRING:
-            app_driver_bc7215_worker_toggle_pairing();
+        case ir_command_type_t::TOGGLE_PAIRING:
+            app_driver_ir_worker_toggle_pairing();
             break;
-
-        case bc7215_command_type_t::ALT_NEXT:
-            app_driver_bc7215_worker_alt_next();
+        case ir_command_type_t::ALT_NEXT:
+            app_driver_ir_worker_alt_next();
             break;
-
-        case bc7215_command_type_t::CLEAR_PAIRING:
-            app_driver_bc7215_worker_clear_pairing(
-                command);
+        case ir_command_type_t::CLEAR_PAIRING:
+            app_driver_ir_worker_clear_pairing(command);
             break;
     }
 }
 
-static void app_driver_bc7215_worker_handle_pairing()
+static void app_driver_ir_worker_handle_pairing()
 {
-    if (!s_ac ||
-        !s_bc7215_pairing.load() ||
-        s_bc7215_worker_state !=
-            bc7215_worker_state_t::PAIRING) {
+    if (!s_ac || !s_ir_pairing.load() ||
+        s_ir_worker_state != ir_worker_state_t::PAIRING) {
         return;
     }
 
@@ -1835,433 +1573,237 @@ static void app_driver_bc7215_worker_handle_pairing()
         return;
     }
 
-    ESP_LOGI(
-        TAG_BC7215,
-        "IR signal captured, initializing AC protocol...");
+    ESP_LOGI(TAG_IR, "IR signal captured for pairing; decoding protocol");
 
-    s_ac->stop_capture();
+    const bool ok = s_ac->pair_from_capture();
+    s_ir_pairing.store(false);
+    app_driver_ir_alt_reset_tracking();
 
-    const bool init_ok =
-        s_ac->init();
-
-    s_bc7215_pairing.store(false);
-    app_driver_bc7215_alt_reset_tracking();
-
-    if (init_ok &&
-        !s_factory_reset_in_progress.load()) {
-
+    if (ok) {
         Temp = 25;
         Mode = 1;
         Fan = 1;
-        PowerOn = false;
-        s_bc7215_match_index = 0;
+        PowerOn = true;
+        s_ir_match_index = 0;
+        s_ir_paired.store(true);
+        s_ac->init_ok = true;
+        s_ir_worker_state = ir_worker_state_t::IDLE;
 
-        s_bc7215_paired.store(true);
-        s_bc7215_worker_state =
-            bc7215_worker_state_t::IDLE;
+        ESP_LOGI(TAG_IR, "IR AC pairing succeeded: protocol=%s",
+                 s_ac->protocol_name());
 
-        ESP_LOGI(
-            TAG_BC7215,
-            "BC7215AC pairing succeeded");
-
-        if (!app_driver_bc7215_save_pairing()) {
-            ESP_LOGW(
-                TAG_BC7215,
-                "Pairing succeeded, but saving pairing data failed");
+        if (!app_driver_ir_save_pairing()) {
+            ESP_LOGW(TAG_IR, "Pairing succeeded but NVS save failed");
         }
-
     } else {
-        s_ac->init_ok = false;
-        s_bc7215_paired.store(false);
-        s_bc7215_worker_state =
-            bc7215_worker_state_t::STOPPED;
+        s_ac->clear_pairing();
+        s_ac->init_ok = s_ac->ready();
+        s_ir_paired.store(false);
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
 
-        ESP_LOGE(
-            TAG_BC7215,
-            "BC7215AC pairing failed after IR capture");
-
-        if (!app_driver_bc7215_erase_saved_pairing()) {
-            ESP_LOGE(
-                TAG_BC7215,
-                "Pairing failed and saved pairing data could not be erased");
-        }
+        ESP_LOGW(TAG_IR,
+                 "IR AC pairing failed after IR capture "
+                 "(unsupported or unrecognized AC protocol)");
+        app_driver_ir_erase_saved_pairing();
     }
 
     app_driver_update_led_states();
 }
 
-static void app_driver_bc7215_worker_parse_signal()
+static void app_driver_ir_worker_parse_signal()
 {
     if (!s_ac) {
         return;
     }
 
-    bool parsed_ok = false;
-
-    int parsed_temp = -1;
-    int parsed_mode = -1;
-    int parsed_fan = -1;
-    int parsed_power = -1;
-
-    bool have_previous_base = false;
-    uint8_t previous_status = 0;
-    bc7215DataMaxPkt_t previous_base{};
-
-    s_ac->stop_capture();
-
-    const bc7215DataVarPkt_t *base_before_parse =
-        s_ac->data_packet();
-
-    if (base_before_parse != nullptr) {
-        previous_status =
-            s_ac->status_byte();
-
-        previous_base =
-            *(reinterpret_cast<
-                const bc7215DataMaxPkt_t *>(
-                    base_before_parse));
-
-        have_previous_base = true;
+    ir_ac::AcLogicalState parsed{};
+    if (!s_ac->parse_capture(&parsed)) {
+        ESP_LOGW(TAG_IR,
+                 "Captured IR signal could not be parsed as the paired AC protocol");
+        s_ir_worker_state = ir_worker_state_t::IDLE;
+        return;
     }
 
-    parsed_ok =
-        s_ac->parse(
-            parsed_temp,
-            parsed_mode,
-            parsed_fan,
-            parsed_power);
+    Temp = app_driver_ir_temperature_to_celsius(parsed.temp_c);
+    Mode = parsed.mode;
+    Fan = parsed.fan;
+    PowerOn = parsed.power;
 
-    if (parsed_ok) {
-        const int new_temp =
-            app_driver_bc7215_temperature_to_celsius(
-                parsed_temp);
+    ESP_LOGI(TAG_IR, "Parsed remote state: Temp=%d Mode=%d Fan=%d Power=%d",
+             Temp, Mode, Fan, static_cast<int>(PowerOn));
 
-        if (parsed_mode >= 0 &&
-            parsed_mode <= 4) {
-            Mode = parsed_mode;
-        }
-
-        if (parsed_fan >= 0 &&
-            parsed_fan <= 3) {
-            Fan = parsed_fan;
-        }
-
-        Temp = new_temp;
-
-        switch (parsed_power) {
-            case 0:
-                PowerOn = false;
-                break;
-
-            case 1:
-                PowerOn = true;
-                break;
-
-            case 2:
-                PowerOn = !PowerOn;
-                break;
-
-            default:
-                PowerOn = true;
-                break;
-        }
-
-        if (!PowerOn &&
-            have_previous_base) {
-
-            bc7215_ac_replace_base(
-                previous_status,
-                reinterpret_cast<
-                    const bc7215DataVarPkt_t *>(
-                        &previous_base));
-        }
-    }
-
-    if (parsed_ok) {
-        ESP_LOGI(
-            TAG_BC7215,
-            "IR parsed: raw Temp=%d Mode=%d Fan=%d "
-            "Power=%d -> Temp=%d Mode=%d Fan=%d Power=%s",
-            parsed_temp,
-            parsed_mode,
-            parsed_fan,
-            parsed_power,
-            Temp,
-            Mode,
-            Fan,
-            PowerOn ? "On" : "Off");
-
-        app_matter_schedule_parsed_ac_state(
-            Temp,
-            Mode,
-            Fan,
-            PowerOn);
-    } else {
-        ESP_LOGW(
-            TAG_BC7215,
-            "Captured IR signal could not be parsed");
-    }
-
-    s_bc7215_worker_state =
-        bc7215_worker_state_t::IDLE;
+    app_matter_schedule_parsed_ac_state(Temp, Mode, Fan, PowerOn);
+    s_ir_worker_state = ir_worker_state_t::IDLE;
 }
 
-static void app_driver_bc7215_worker_handle_parsing(
-    bool &parsing_was_enabled)
+static void app_driver_ir_worker_handle_parsing(bool &parsing_was_enabled)
 {
     const bool should_parse =
         s_matter_subscription_active.load() &&
-        s_bc7215_paired.load() &&
-        !s_bc7215_pairing.load() &&
-        !s_bc7215_alt_traversal_active.load() &&
+        s_ir_paired.load() &&
+        !s_ir_pairing.load() &&
+        !s_ir_alt_traversal_active.load() &&
         !s_factory_reset_in_progress.load() &&
         s_ac != nullptr &&
         s_ac->init_ok;
 
     if (!should_parse) {
-        s_ac->stop_capture();
-
-            s_bc7215_worker_state =
-                bc7215_worker_state_t::STOPPED;
+        if (s_ac) {
+            s_ac->stop_capture();
+        }
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
 
         if (parsing_was_enabled) {
             parsing_was_enabled = false;
-
-            ESP_LOGI(
-                TAG_BC7215,
-                "BC7215 parsing disabled");
+            ESP_LOGI(TAG_IR, "IR parsing disabled");
         }
-
         return;
     }
 
     if (!parsing_was_enabled) {
         parsing_was_enabled = true;
-
-        ESP_LOGI(
-            TAG_BC7215,
-            "BC7215 parsing enabled: paired and subscribed");
+        ESP_LOGI(TAG_IR, "IR parsing enabled: paired and subscribed");
     }
 
     if (s_ac->is_busy()) {
         return;
     }
 
-    if (s_bc7215_worker_state ==
-            bc7215_worker_state_t::STOPPED ||
-        s_bc7215_worker_state ==
-            bc7215_worker_state_t::IDLE) {
-
-        s_ac->start_capture(0);
-
-        s_bc7215_worker_state =
-            bc7215_worker_state_t::PARSING;
-
-        ESP_LOGI(
-            TAG_BC7215,
-            "BC7215 parsing RX armed");
-
+    if (s_ir_worker_state == ir_worker_state_t::STOPPED ||
+        s_ir_worker_state == ir_worker_state_t::IDLE) {
+        s_ac->start_capture();
+        s_ir_worker_state = ir_worker_state_t::PARSING;
+        ESP_LOGI(TAG_IR, "IR parsing RX armed");
         return;
     }
 
-    if (s_bc7215_worker_state ==
-            bc7215_worker_state_t::PARSING &&
+    if (s_ir_worker_state == ir_worker_state_t::PARSING &&
         s_ac->signal_captured()) {
-
-        app_driver_bc7215_worker_parse_signal();
+        app_driver_ir_worker_parse_signal();
     }
 }
 
-static void app_driver_bc7215_worker_task(
-    void *arg)
+static void app_driver_ir_worker_task(void *arg)
 {
     bool parsing_was_enabled = false;
-
-    ESP_LOGI(
-        TAG_BC7215,
-        "BC7215 worker task started");
+    ESP_LOGI(TAG_IR, "IR worker task started");
 
     for (;;) {
-        bc7215_command_t command{};
+        ir_command_t command{};
 
-        if (xQueueReceive(
-                s_bc7215_command_queue,
-                &command,
-                pdMS_TO_TICKS(20)) == pdTRUE) {
-
-            app_driver_bc7215_worker_process_command(
-                command);
-
-            /*
-             * Drain commands already queued by rapid slider/controller
-             * updates before returning to the receive state machine.
-             */
-            while (xQueueReceive(
-                       s_bc7215_command_queue,
-                       &command,
-                       0) == pdTRUE) {
-
-                app_driver_bc7215_worker_process_command(
-                    command);
+        if (xQueueReceive(s_ir_command_queue, &command, pdMS_TO_TICKS(20)) ==
+            pdTRUE) {
+            app_driver_ir_worker_process_command(command);
+            while (xQueueReceive(s_ir_command_queue, &command, 0) == pdTRUE) {
+                app_driver_ir_worker_process_command(command);
             }
-
-            /*
-             * Match ESPHome's cooperative loop behavior: after a control
-             * operation, return to the top of the worker loop. This inserts
-             * one queue-wait interval before parsing can re-arm RX, giving
-             * BC7215 time to assert BUSY for the transmit operation.
-             */
             continue;
         }
 
-        if (s_bc7215_worker_state ==
-            bc7215_worker_state_t::PAIRING) {
-
-            app_driver_bc7215_worker_handle_pairing();
+        if (s_ir_worker_state == ir_worker_state_t::PAIRING) {
+            app_driver_ir_worker_handle_pairing();
             continue;
         }
 
-        app_driver_bc7215_worker_handle_parsing(
-            parsing_was_enabled);
+        app_driver_ir_worker_handle_parsing(parsing_was_enabled);
     }
 }
 
-static esp_err_t app_driver_bc7215_start_worker()
+static esp_err_t app_driver_ir_start_worker()
 {
-    if (s_bc7215_worker_task_handle != nullptr) {
+    if (s_ir_worker_task_handle != nullptr) {
         return ESP_OK;
     }
 
-    if (s_bc7215_command_queue == nullptr) {
-        s_bc7215_command_queue =
-            xQueueCreate(
-                12,
-                sizeof(bc7215_command_t));
-
-        if (s_bc7215_command_queue == nullptr) {
-            ESP_LOGE(
-                TAG_BC7215,
-                "Failed to create BC7215 command queue");
+    if (s_ir_command_queue == nullptr) {
+        s_ir_command_queue =
+            xQueueCreate(12, sizeof(ir_command_t));
+        if (s_ir_command_queue == nullptr) {
+            ESP_LOGE(TAG_IR, "Failed to create IR command queue");
             return ESP_ERR_NO_MEM;
         }
     }
 
-    BaseType_t result =
-        xTaskCreate(
-            app_driver_bc7215_worker_task,
-            "bc7215_worker",
-            6144,
-            nullptr,
-            5,
-            &s_bc7215_worker_task_handle);
+    BaseType_t result = xTaskCreate(
+        app_driver_ir_worker_task,
+        "ir_worker",
+        8192,
+        nullptr,
+        5,
+        &s_ir_worker_task_handle);
 
     if (result != pdPASS) {
-        s_bc7215_worker_task_handle = nullptr;
-
-        vQueueDelete(
-            s_bc7215_command_queue);
-
-        s_bc7215_command_queue = nullptr;
-
-        ESP_LOGE(
-            TAG_BC7215,
-            "Failed to create BC7215 worker task");
-
+        s_ir_worker_task_handle = nullptr;
+        vQueueDelete(s_ir_command_queue);
+        s_ir_command_queue = nullptr;
+        ESP_LOGE(TAG_IR, "Failed to create IR worker task");
         return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
 }
 
-static void app_driver_bc7215_dump_config()
+static void app_driver_ir_dump_config()
 {
     const esp_app_desc_t *app_desc = esp_app_get_description();
 
-    ESP_LOGI(TAG_BC7215, "BC7215 AC Configuration:");
-    ESP_LOGI(TAG_BC7215, "  Project name: %s",
+    ESP_LOGI(TAG_IR, "IRremoteESP8266 AC Configuration:");
+    ESP_LOGI(TAG_IR, "  Project name: %s",
              app_desc != nullptr ? app_desc->project_name : "unknown");
-    ESP_LOGI(TAG_BC7215, "  Project version: %s",
+    ESP_LOGI(TAG_IR, "  Project version: %s",
              app_desc != nullptr ? app_desc->version : "unknown");
-    ESP_LOGI(TAG_BC7215, "  UART: %d", static_cast<int>(BC7215_UART_NUM));
-    ESP_LOGI(TAG_BC7215, "  BC7215 TX pin: GPIO%d",
-             static_cast<int>(BC7215_TX_PIN));
-    ESP_LOGI(TAG_BC7215, "  BC7215 RX pin: GPIO%d",
-             static_cast<int>(BC7215_RX_PIN));
-    ESP_LOGI(TAG_BC7215, "  BUSY pin: GPIO%d",
-             static_cast<int>(BC7215_BUSY_PIN));
-    ESP_LOGI(TAG_BC7215, "  MOD pin: GPIO%d",
-             static_cast<int>(BC7215_MOD_PIN));
+    ESP_LOGI(TAG_IR, "  IR TX pin: GPIO%d", static_cast<int>(IR_TX_PIN));
+    ESP_LOGI(TAG_IR, "  IR RX pin: GPIO%d", static_cast<int>(IR_RX_PIN));
 
     if (s_ac) {
-        ESP_LOGI(TAG_BC7215, "  AC Library Version: %s",
-                 s_ac->lib_version());
-        ESP_LOGI(TAG_BC7215, "  Library temperature unit: %s",
-                 s_bc7215_library_unit_celsius ? "Celsius" : "Fahrenheit");
-        ESP_LOGI(TAG_BC7215, "  Paired: %s",
-                 s_bc7215_paired.load() ? "yes" : "no");
+        ESP_LOGI(TAG_IR, "  IR Library Version: %s", s_ac->lib_version());
+        ESP_LOGI(TAG_IR, "  Paired: %s", s_ir_paired.load() ? "yes" : "no");
+        if (s_ir_paired.load()) {
+            ESP_LOGI(TAG_IR, "  Protocol: %s", s_ac->protocol_name());
+        }
     } else {
-        ESP_LOGI(TAG_BC7215, "  AC Library Version: unavailable");
-        ESP_LOGI(TAG_BC7215, "  Library temperature unit: Celsius");
-        ESP_LOGI(TAG_BC7215, "  Paired: no");
+        ESP_LOGI(TAG_IR, "  IR Library Version: unavailable");
+        ESP_LOGI(TAG_IR, "  Paired: no");
     }
 }
 
-static bool app_driver_bc7215_save_pairing()
+
+static bool app_driver_ir_save_pairing()
 {
-    if (!s_ac || !s_ac->init_ok) {
-        ESP_LOGW(TAG_BC7215,
-                 "Cannot save pairing data: BC7215AC is not initialized");
+    if (!s_ac || !s_ac->init_ok || !s_ac->paired()) {
+        ESP_LOGW(TAG_IR,
+                 "Cannot save pairing data: IR AC is not paired");
         return false;
     }
 
-    const bc7215DataVarPkt_t *src_data = s_ac->data_packet();
-    const bc7215FormatPkt_t *src_format = s_ac->format_packet();
+    const ir_ac::AcPairingInfo info = s_ac->pairing();
 
-    if (src_data == nullptr || src_format == nullptr) {
-        ESP_LOGE(TAG_BC7215,
-                 "Cannot save pairing data: data or format packet is null");
-        return false;
-    }
-
-    bc7215_stored_pairing_data_t saved{};
-
-    const size_t data_bytes =
-        static_cast<size_t>((src_data->bitLen + 7U) / 8U);
-
-    if (data_bytes == 0 || data_bytes > sizeof(saved.data.data)) {
-        ESP_LOGE(TAG_BC7215,
-                 "Cannot save pairing data: invalid data size %u",
-                 static_cast<unsigned>(data_bytes));
-        return false;
-    }
-
-    saved.magic = BC7215_PAIRING_MAGIC;
-    saved.version = BC7215_PAIRING_VERSION;
+    ir_stored_pairing_data_t saved{};
+    saved.magic = IR_PAIRING_MAGIC;
+    saved.version = IR_PAIRING_VERSION;
     saved.struct_size = sizeof(saved);
-    saved.status = s_ac->status_byte();
-    saved.library_unit_celsius = s_bc7215_library_unit_celsius ? 1 : 0;
-    saved.match_index = s_bc7215_match_index;
-    saved.data.bitLen = src_data->bitLen;
-    memcpy(saved.data.data, src_data->data, data_bytes);
-    saved.format = *src_format;
+    saved.protocol = info.protocol;
+    saved.model = info.model;
+    saved.alt_index = static_cast<uint8_t>(s_ac->current_alt_index());
+    saved.reserved = 0;
 
     nvs_handle_t nvs_handle = 0;
     esp_err_t err = nvs_open(
-        BC7215_NVS_NAMESPACE,
+        IR_NVS_NAMESPACE,
         NVS_READWRITE,
         &nvs_handle
     );
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_BC7215,
-                 "Failed to open BC7215 NVS namespace: %s",
+        ESP_LOGE(TAG_IR,
+                 "Failed to open IR NVS namespace: %s",
                  esp_err_to_name(err));
         return false;
     }
 
     err = nvs_set_blob(
         nvs_handle,
-        BC7215_NVS_PAIRING_KEY,
+        IR_NVS_PAIRING_KEY,
         &saved,
         sizeof(saved)
     );
@@ -2273,49 +1815,48 @@ static bool app_driver_bc7215_save_pairing()
     nvs_close(nvs_handle);
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_BC7215,
-                 "Failed to save BC7215 pairing data: %s",
+        ESP_LOGE(TAG_IR,
+                 "Failed to save IR pairing data: %s",
                  esp_err_to_name(err));
         return false;
     }
 
-    ESP_LOGI(TAG_BC7215,
-             "BC7215 pairing data saved: status=0x%02x, bits=%u, "
-             "match_index=%u",
-             saved.status,
-             static_cast<unsigned>(saved.data.bitLen),
-             static_cast<unsigned>(saved.match_index));
+    ESP_LOGI(TAG_IR,
+             "IR pairing data saved: protocol=%d model=%d alt_index=%u",
+             static_cast<int>(saved.protocol),
+             static_cast<int>(saved.model),
+             static_cast<unsigned>(saved.alt_index));
     return true;
 }
 
 /*
- * Erase only the application-owned BC7215 pairing record.
+ * Erase only the application-owned IR pairing record.
  *
  * Matter's factory reset is performed separately after this function
  * returns. ESP_ERR_NVS_NOT_FOUND is treated as success because the desired
  * end state is already satisfied.
  */
-static bool app_driver_bc7215_erase_saved_pairing()
+static bool app_driver_ir_erase_saved_pairing()
 {
     nvs_handle_t nvs_handle = 0;
 
     esp_err_t err =
         nvs_open(
-            BC7215_NVS_NAMESPACE,
+            IR_NVS_NAMESPACE,
             NVS_READWRITE,
             &nvs_handle);
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(
-            TAG_BC7215,
-            "BC7215 pairing namespace is already absent");
+            TAG_IR,
+            "IR pairing namespace is already absent");
         return true;
     }
 
     if (err != ESP_OK) {
         ESP_LOGE(
-            TAG_BC7215,
-            "Failed to open BC7215 NVS namespace for erase: %s",
+            TAG_IR,
+            "Failed to open IR NVS namespace for erase: %s",
             esp_err_to_name(err));
         return false;
     }
@@ -2323,7 +1864,7 @@ static bool app_driver_bc7215_erase_saved_pairing()
     err =
         nvs_erase_key(
             nvs_handle,
-            BC7215_NVS_PAIRING_KEY);
+            IR_NVS_PAIRING_KEY);
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         err = ESP_OK;
@@ -2337,34 +1878,34 @@ static bool app_driver_bc7215_erase_saved_pairing()
 
     if (err != ESP_OK) {
         ESP_LOGE(
-            TAG_BC7215,
-            "Failed to erase BC7215 pairing data: %s",
+            TAG_IR,
+            "Failed to erase IR pairing data: %s",
             esp_err_to_name(err));
         return false;
     }
 
     ESP_LOGI(
-        TAG_BC7215,
-        "BC7215 pairing data erased");
+        TAG_IR,
+        "IR pairing data erased");
 
     return true;
 }
 
 /*
- * Clear the runtime pairing state and erase the application-owned BC7215
+ * Clear the runtime pairing state and erase the application-owned IR
  * pairing record. Matter factory reset is performed separately.
  */
-static bool app_driver_bc7215_clear_pairing()
+static bool app_driver_ir_clear_pairing()
 {
-    if (s_bc7215_command_queue == nullptr ||
-        s_bc7215_worker_task_handle == nullptr) {
+    if (s_ir_command_queue == nullptr ||
+        s_ir_worker_task_handle == nullptr) {
 
         ESP_LOGW(
-            TAG_BC7215,
-            "BC7215 worker is unavailable; erasing saved pairing only");
+            TAG_IR,
+            "IR worker is unavailable; erasing saved pairing only");
 
-        s_bc7215_paired.store(false);
-        return app_driver_bc7215_erase_saved_pairing();
+        s_ir_paired.store(false);
+        return app_driver_ir_erase_saved_pairing();
     }
 
     /*
@@ -2374,16 +1915,16 @@ static bool app_driver_bc7215_clear_pairing()
         pdTRUE,
         0);
 
-    s_bc7215_last_clear_success.store(false);
+    s_ir_last_clear_success.store(false);
 
-    bc7215_command_t command{};
+    ir_command_t command{};
     command.type =
-        bc7215_command_type_t::CLEAR_PAIRING;
+        ir_command_type_t::CLEAR_PAIRING;
     command.completion_task =
         xTaskGetCurrentTaskHandle();
 
     esp_err_t queue_err =
-        app_driver_bc7215_enqueue_command(
+        app_driver_ir_enqueue_command(
             command,
             pdMS_TO_TICKS(200));
 
@@ -2396,42 +1937,39 @@ static bool app_driver_bc7215_clear_pairing()
             pdMS_TO_TICKS(5000)) == 0) {
 
         ESP_LOGE(
-            TAG_BC7215,
-            "Timed out waiting for BC7215 pairing clear");
+            TAG_IR,
+            "Timed out waiting for IR pairing clear");
         return false;
     }
 
-    return s_bc7215_last_clear_success.load();
+    return s_ir_last_clear_success.load();
 }
 
-static bool app_driver_bc7215_load_pairing()
+static bool app_driver_ir_load_pairing()
 {
     if (!s_ac) {
         return false;
     }
 
-    /*
-     * Loading is authoritative: the device is unpaired unless every stored
-     * field validates and init(saved...) succeeds.
-     */
-    s_ac->init_ok = false;
-    s_bc7215_paired.store(false);
+    s_ac->clear_pairing();
+    s_ac->init_ok = s_ac->ready();
+    s_ir_paired.store(false);
 
     nvs_handle_t nvs_handle = 0;
     esp_err_t err = nvs_open(
-        BC7215_NVS_NAMESPACE,
+        IR_NVS_NAMESPACE,
         NVS_READONLY,
         &nvs_handle
     );
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGI(TAG_BC7215, "No saved BC7215 pairing data");
+        ESP_LOGI(TAG_IR, "No saved IR pairing data");
         return false;
     }
 
     if (err != ESP_OK) {
-        ESP_LOGW(TAG_BC7215,
-                 "Failed to open BC7215 NVS namespace: %s",
+        ESP_LOGW(TAG_IR,
+                 "Failed to open IR NVS namespace: %s",
                  esp_err_to_name(err));
         return false;
     }
@@ -2439,162 +1977,118 @@ static bool app_driver_bc7215_load_pairing()
     size_t stored_size = 0;
     err = nvs_get_blob(
         nvs_handle,
-        BC7215_NVS_PAIRING_KEY,
+        IR_NVS_PAIRING_KEY,
         nullptr,
         &stored_size
     );
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(nvs_handle);
-        ESP_LOGI(TAG_BC7215, "No saved BC7215 pairing data");
+        ESP_LOGI(TAG_IR, "No saved IR pairing data");
         return false;
     }
 
     if (err != ESP_OK) {
         nvs_close(nvs_handle);
-        ESP_LOGW(TAG_BC7215,
-                 "Failed to query BC7215 pairing data: %s",
+        ESP_LOGW(TAG_IR,
+                 "Failed to query IR pairing data: %s",
                  esp_err_to_name(err));
         return false;
     }
 
-    if (stored_size != sizeof(bc7215_stored_pairing_data_t)) {
+    if (stored_size != sizeof(ir_stored_pairing_data_t)) {
         nvs_close(nvs_handle);
-        ESP_LOGW(TAG_BC7215,
-                 "Saved BC7215 pairing data size mismatch: stored=%u expected=%u",
+        ESP_LOGW(TAG_IR,
+                 "Saved IR pairing data size mismatch: stored=%u expected=%u",
                  static_cast<unsigned>(stored_size),
-                 static_cast<unsigned>(sizeof(bc7215_stored_pairing_data_t)));
+                 static_cast<unsigned>(sizeof(ir_stored_pairing_data_t)));
         return false;
     }
 
-    bc7215_stored_pairing_data_t saved{};
+    ir_stored_pairing_data_t saved{};
     err = nvs_get_blob(
         nvs_handle,
-        BC7215_NVS_PAIRING_KEY,
+        IR_NVS_PAIRING_KEY,
         &saved,
         &stored_size
     );
     nvs_close(nvs_handle);
 
     if (err != ESP_OK) {
-        ESP_LOGW(TAG_BC7215,
-                 "Failed to read BC7215 pairing data: %s",
+        ESP_LOGW(TAG_IR,
+                 "Failed to read IR pairing data: %s",
                  esp_err_to_name(err));
         return false;
     }
 
-    if (saved.magic != BC7215_PAIRING_MAGIC ||
-        saved.version != BC7215_PAIRING_VERSION ||
+    if (saved.magic != IR_PAIRING_MAGIC ||
+        saved.version != IR_PAIRING_VERSION ||
         saved.struct_size != sizeof(saved)) {
-        ESP_LOGW(TAG_BC7215,
-                 "Saved BC7215 pairing data has an unsupported format");
+        ESP_LOGW(TAG_IR,
+                 "Saved IR pairing data has an unsupported format");
         return false;
     }
 
-    const size_t data_bytes =
-        static_cast<size_t>((saved.data.bitLen + 7U) / 8U);
+    ir_ac::AcPairingInfo info{};
+    info.protocol = saved.protocol;
+    info.model = saved.model;
+    info.valid = true;
 
-    if (data_bytes == 0 || data_bytes > sizeof(saved.data.data)) {
-        ESP_LOGW(TAG_BC7215,
-                 "Saved BC7215 pairing data has invalid bit length: %u",
-                 static_cast<unsigned>(saved.data.bitLen));
+    if (!s_ac->apply_pairing(info)) {
+        ESP_LOGW(TAG_IR,
+                 "Saved IR pairing data exists, but protocol apply failed");
+        s_ac->clear_pairing();
+        s_ac->init_ok = s_ac->ready();
         return false;
     }
 
-    s_bc7215_library_unit_celsius =
-        saved.library_unit_celsius != 0;
+    s_ir_match_index = saved.alt_index;
+    s_ac->init_ok = true;
+    s_ir_paired.store(true);
 
-    if (s_bc7215_library_unit_celsius) {
-        s_ac->set_celsius();
-    } else {
-        s_ac->set_fahrenheit();
-    }
-
-    if (!s_ac->init(saved.status, saved.data, saved.format)) {
-        ESP_LOGW(TAG_BC7215,
-                 "Saved BC7215 pairing data exists, but protocol init failed");
-        s_ac->init_ok = false;
-        s_bc7215_library_unit_celsius = true;
-        s_ac->set_celsius();
-        return false;
-    }
-
-    for (uint8_t index = 0;
-         index < saved.match_index;
-         ++index) {
-
-        if (!s_ac->match_next()) {
-            ESP_LOGW(
-                TAG_BC7215,
-                "Saved match index %u cannot be restored; "
-                "using the first learned match",
-                static_cast<unsigned>(
-                    saved.match_index));
-
-            s_bc7215_match_index = 0;
-
-            if (!s_ac->init(
-                    saved.status,
-                    saved.data,
-                    saved.format)) {
-
-                s_ac->init_ok = false;
-                return false;
-            }
-
-            break;
-        }
-
-        ++s_bc7215_match_index;
-    }
-
-    s_bc7215_paired.store(true);
-
-    ESP_LOGI(TAG_BC7215,
-             "BC7215 pairing restored: status=0x%02x, bits=%u, "
-             "unit=%s, match_index=%u",
-             saved.status,
-             static_cast<unsigned>(saved.data.bitLen),
-             saved.library_unit_celsius != 0 ? "C" : "F",
-             static_cast<unsigned>(s_bc7215_match_index));
+    ESP_LOGI(TAG_IR,
+             "IR pairing restored: protocol=%s model=%d alt_index=%u",
+             s_ac->protocol_name(),
+             static_cast<int>(saved.model),
+             static_cast<unsigned>(saved.alt_index));
     return true;
 }
 
-static void app_driver_bc7215_request_pairing_toggle()
+static void app_driver_ir_request_pairing_toggle()
 {
     if (s_factory_reset_in_progress.load()) {
         ESP_LOGW(
-            TAG_BC7215,
+            TAG_IR,
             "Cannot toggle pairing during factory reset");
         return;
     }
 
     esp_err_t err =
-        app_driver_bc7215_queue_pairing_toggle();
+        app_driver_ir_queue_pairing_toggle();
 
     if (err != ESP_OK) {
         ESP_LOGE(
-            TAG_BC7215,
-            "Failed to queue BC7215 pairing toggle: %s",
+            TAG_IR,
+            "Failed to queue IR pairing toggle: %s",
             esp_err_to_name(err));
     }
 }
 
-static void app_driver_bc7215_request_alt_next()
+static void app_driver_ir_request_alt_next()
 {
     if (s_factory_reset_in_progress.load()) {
         ESP_LOGW(
-            TAG_BC7215,
+            TAG_IR,
             "Cannot advance Alt traversal during factory reset");
         return;
     }
 
     esp_err_t err =
-        app_driver_bc7215_queue_alt_next();
+        app_driver_ir_queue_alt_next();
 
     if (err != ESP_OK) {
         ESP_LOGE(
-            TAG_BC7215,
+            TAG_IR,
             "Failed to queue Alt traversal command: %s",
             esp_err_to_name(err));
     }
@@ -2606,18 +2100,18 @@ static void app_driver_button_single_click_cb(
 {
     ESP_LOGI(
         TAG,
-        "Button single clicked: toggle BC7215AC pairing");
+        "Button single clicked: toggle IR AC pairing");
 
-    app_driver_bc7215_request_pairing_toggle();
+    app_driver_ir_request_pairing_toggle();
 }
 
 static void app_driver_button_double_click_cb(void *arg, void *data)
 {
     ESP_LOGI(
         TAG,
-        "Button double clicked: advance BC7215 Alt protocol traversal");
+        "Button double clicked: advance IR Alt protocol traversal");
 
-    app_driver_bc7215_request_alt_next();
+    app_driver_ir_request_alt_next();
 }
 
 
@@ -2629,7 +2123,7 @@ static void app_driver_button_double_click_cb(void *arg, void *data)
  *   LED starts blinking at 3 Hz and continues while the button is held.
  *
  * Released:
- *   BC7215 pairing data is erased immediately,
+ *   IR pairing data is erased immediately,
  *   then Matter factory reset is started.
  */
 static void app_driver_factory_reset_task(void *arg)
@@ -2639,17 +2133,17 @@ static void app_driver_factory_reset_task(void *arg)
         "Factory reset confirmed; erasing pairing information");
 
     const bool pairing_erased =
-        app_driver_bc7215_clear_pairing();
+        app_driver_ir_clear_pairing();
 
     if (!pairing_erased) {
         /*
          * Continue with Matter reset, but leave a clear diagnostic.
-         * A future boot will not silently claim that the BC7215 record was
+         * A future boot will not silently claim that the IR record was
          * successfully removed.
          */
         ESP_LOGE(
             TAG,
-            "BC7215 pairing erase failed; continuing Matter factory reset");
+            "IR pairing erase failed; continuing Matter factory reset");
     }
 
     ESP_LOGI(
@@ -2665,7 +2159,7 @@ static void app_driver_factory_reset_task(void *arg)
     /*
      * Normally factory_reset() causes restart. Keep cleanup here for an
      * unexpected implementation that returns without rebooting immediately.
-     * The BC7215 worker remains alive in STOPPED state after CLEAR_PAIRING.
+     * The IR worker remains alive in STOPPED state after CLEAR_PAIRING.
      */
     s_factory_reset_in_progress.store(false);
     s_factory_reset_task_handle = nullptr;
@@ -2802,7 +2296,7 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 				Key = 2;
 				uint8_t matter_mode = val->val.u8;
                 /*
-                 * Matter SystemMode -> BC7215 Mode:
+                 * Matter SystemMode -> IR Mode:
                  *   0 Off      -> Power=false, retain the previous Mode
                  *   1 Auto     -> Mode=0
                  *   3 Cool     -> Mode=1
@@ -2971,18 +2465,18 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 PowerOn = true;
 
                 Fan =
-                    app_driver_percent_to_bc7215_fan(
+                    app_driver_percent_to_ir_fan(
                         requested_percent);
 
                 Key = 3;
 
                 const uint8_t normalized_mode =
-                    app_driver_bc7215_fan_to_matter(
+                    app_driver_ir_fan_to_matter(
                         Fan,
                         true);
 
                 const uint8_t normalized_percent =
-                    app_driver_bc7215_fan_to_percent(
+                    app_driver_ir_fan_to_percent(
                         Fan,
                         true);
 
@@ -3011,7 +2505,7 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
     if (Key >= 0 &&
         !s_factory_reset_in_progress.load()) {
 
-        if (!s_bc7215_alt_traversal_active.load()) {
+        if (!s_ir_alt_traversal_active.load()) {
             app_driver_led_set_mode(
                 ONE_SHOT_ON_1S);
         }
@@ -3020,11 +2514,11 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 
         if (Key == 4) {
             queue_err =
-                app_driver_bc7215_queue_power(
+                app_driver_ir_queue_power(
                     PowerOn);
         } else {
             queue_err =
-                app_driver_bc7215_queue_state(
+                app_driver_ir_queue_state(
                     Temp,
                     Mode,
                     Fan,
@@ -3034,7 +2528,7 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 
         if (queue_err != ESP_OK) {
             ESP_LOGE(
-                TAG_BC7215,
+                TAG_IR,
                 "Failed to queue Matter IR command: %s",
                 esp_err_to_name(queue_err));
         }
@@ -3075,7 +2569,7 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      *   PercentSetting       = 0%
      *   PercentCurrent       = 0%
      *
-     * Keep the last/default BC7215 fan level at Low for the next power-on
+     * Keep the last/default IR fan level at Low for the next power-on
      * or non-zero fan-speed command.
      */
     PowerOn = false;
@@ -3087,11 +2581,11 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      * transmit operation with parsing and pairing.
      */
     esp_err_t initial_off_err =
-        app_driver_bc7215_queue_power(false);
+        app_driver_ir_queue_power(false);
 
     if (initial_off_err != ESP_OK) {
         ESP_LOGW(
-            TAG_BC7215,
+            TAG_IR,
             "Failed to queue initial AC Off command: %s",
             esp_err_to_name(initial_off_err));
     }
@@ -3184,45 +2678,32 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
     return first_error;
 }
 
-static esp_err_t app_driver_bc7215_init()
+static esp_err_t app_driver_ir_init()
 {
-    ESP_LOGI(TAG_BC7215, "BC7215AC init start");
-    ESP_LOGI(TAG_BC7215, "UART=%d RX=GPIO%d TX=GPIO%d BUSY=GPIO%d MOD=GPIO%d",
-             static_cast<int>(BC7215_UART_NUM),
-             static_cast<int>(BC7215_RX_PIN),
-             static_cast<int>(BC7215_TX_PIN),
-             static_cast<int>(BC7215_BUSY_PIN),
-             static_cast<int>(BC7215_MOD_PIN));
+    ESP_LOGI(TAG_IR, "IRremoteESP8266 AC init start");
+    ESP_LOGI(TAG_IR, "TX=GPIO%d RX=GPIO%d",
+             static_cast<int>(IR_TX_PIN),
+             static_cast<int>(IR_RX_PIN));
 
-    s_ac = std::make_unique<bc7215::BC7215AC>(
-        BC7215_UART_NUM,
-        BC7215_RX_PIN,
-        BC7215_TX_PIN,
-        BC7215_BUSY_PIN,
-        BC7215_MOD_PIN
-    );
+    s_ac = std::make_unique<ir_ac::IrAcController>();
 
-    esp_err_t err = s_ac->begin();
+    esp_err_t err = s_ac->begin(IR_TX_PIN, IR_RX_PIN);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_BC7215, "BC7215AC begin failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG_IR, "IrAcController begin failed: %s", esp_err_to_name(err));
         s_ac.reset();
         return err;
     }
 
-    // Use Celsius by default; restore Fahrenheit if it is stored in NVS.
-    s_bc7215_library_unit_celsius = true;
-    s_ac->set_celsius();
-	s_ac->stop_capture();
+    s_ac->stop_capture();
 
-    ESP_LOGI(TAG_BC7215, "BC7215AC begin OK");
+    ESP_LOGI(TAG_IR, "IrAcController begin OK");
 
     /*
-     * begin() initializes only the BC7215 hardware. Next, attempt to
-     * initialize BC7215AC using protocol data stored in NVS. Dump the
-     * configuration after restoration so the Paired field is accurate.
+     * begin() initializes only the IR hardware path. Next, attempt to
+     * restore a previously saved protocol pairing from NVS.
      */
-    app_driver_bc7215_load_pairing();
-    app_driver_bc7215_dump_config();
+    app_driver_ir_load_pairing();
+    app_driver_ir_dump_config();
 
     return ESP_OK;
 }
@@ -3249,23 +2730,23 @@ app_driver_handle_t app_driver_room_air_conditioner_init()
         app_driver_led_set_mode(LED_MODE_BLINK_1HZ);
     }
 
-    /* Initialize BC7215AC hardware */
-    esp_err_t err = app_driver_bc7215_init();
+    /* Initialize IRremoteESP8266 AC hardware path */
+    esp_err_t err = app_driver_ir_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_BC7215,
-                 "BC7215AC init failed, Matter app will continue");
+        ESP_LOGE(TAG_IR,
+                 "IR AC init failed, Matter app will continue");
     } else {
         esp_err_t worker_err =
-            app_driver_bc7215_start_worker();
+            app_driver_ir_start_worker();
 
         if (worker_err != ESP_OK) {
             ESP_LOGE(
-                TAG_BC7215,
-                "BC7215 worker task init failed: %s",
+                TAG_IR,
+                "IR worker task init failed: %s",
                 esp_err_to_name(worker_err));
         }
 
-        if (s_bc7215_paired.load()) {
+        if (s_ir_paired.load()) {
             app_driver_led_set_mode(
                 LED_MODE_BREATH_3S);
         }
@@ -3355,14 +2836,14 @@ void app_driver_update_led_states()
         return;
     }
 
-    if (s_bc7215_alt_traversal_active.load()) {
+    if (s_ir_alt_traversal_active.load()) {
         app_driver_led_set_static(false);
         return;
     }
 
 	matter_state = app_get_matter_state_locked();
 
-	if (!s_bc7215_paired.load() &&
+	if (!s_ir_paired.load() &&
         matter_state == app_matter_state_t::NOT_COMMISSIONED) {
 		app_driver_led_set_mode(LED_MODE_ON);
 		return;
@@ -3376,12 +2857,12 @@ void app_driver_update_led_states()
 		return;
 	}
 
-	if (s_bc7215_pairing.load()) {
+	if (s_ir_pairing.load()) {
 		app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
         return;
 	}	
 
-    if (!s_bc7215_paired.load() &&
+    if (!s_ir_paired.load() &&
         matter_state == app_matter_state_t::SUBSCRIBED) {
 
         app_driver_led_set_mode(
@@ -3389,7 +2870,7 @@ void app_driver_update_led_states()
         return;
     }
 
-    if (s_bc7215_paired.load()) {
+    if (s_ir_paired.load()) {
         if (matter_state ==
             app_matter_state_t::NOT_COMMISSIONED) {
 
