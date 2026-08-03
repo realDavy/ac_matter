@@ -10,7 +10,6 @@
 
 #include <driver/i2c.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -49,7 +48,7 @@ static constexpr uint8_t SHT30_CMD_SOFT_RESET[] = {0x30, 0xA2};
 
 typedef struct {
     sht30_sensor_config_t *config;
-    esp_timer_handle_t timer;
+    TaskHandle_t task;
     bool is_initialized;
 } sht30_sensor_ctx_t;
 
@@ -155,26 +154,34 @@ static esp_err_t sht30_measure(float *temperature_c, float *humidity_pct)
     return ESP_OK;
 }
 
-static void timer_cb_internal(void *arg)
+static void sht30_notify(sht30_sensor_config_t *config, float temp, float humidity)
+{
+    if (config->temperature.cb) {
+        config->temperature.cb(config->temperature.endpoint_id, temp, config->user_data);
+    }
+    if (config->humidity.cb) {
+        config->humidity.cb(config->humidity.endpoint_id, humidity, config->user_data);
+    }
+}
+
+/*
+ * Sampling runs in a FreeRTOS task (not esp_timer) because the measurement
+ * path needs a short blocking wait for the conversion to finish.
+ */
+static void sht30_poll_task(void *arg)
 {
     auto *ctx = static_cast<sht30_sensor_ctx_t *>(arg);
-    if (!(ctx && ctx->config)) {
-        return;
-    }
+    const uint32_t interval_ms =
+        (ctx->config && ctx->config->interval_ms) ? ctx->config->interval_ms : 5000;
 
-    float temp = 0.0f;
-    float humidity = 0.0f;
-    if (sht30_measure(&temp, &humidity) != ESP_OK) {
-        return;
-    }
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
 
-    if (ctx->config->temperature.cb) {
-        ctx->config->temperature.cb(ctx->config->temperature.endpoint_id, temp,
-                                     ctx->config->user_data);
-    }
-    if (ctx->config->humidity.cb) {
-        ctx->config->humidity.cb(ctx->config->humidity.endpoint_id, humidity,
-                                 ctx->config->user_data);
+        float temp = 0.0f;
+        float humidity = 0.0f;
+        if (sht30_measure(&temp, &humidity) == ESP_OK && ctx->config) {
+            sht30_notify(ctx->config, temp, humidity);
+        }
     }
 }
 
@@ -217,26 +224,14 @@ esp_err_t sht30_sensor_init(sht30_sensor_config_t *config)
 
     s_ctx.config = config;
 
-    esp_timer_create_args_t args = {};
-    args.callback = timer_cb_internal;
-    args.arg = &s_ctx;
-    args.name = "sht30";
-
-    err = esp_timer_create(&args, &s_ctx.timer);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_timer_create failed: %s", esp_err_to_name(err));
-        i2c_driver_delete(I2C_MASTER_NUM);
-        return err;
-    }
-
     const uint32_t interval_ms = config->interval_ms ? config->interval_ms : 5000;
-    err = esp_timer_start_periodic(s_ctx.timer, static_cast<uint64_t>(interval_ms) * 1000ULL);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_timer_start_periodic failed: %s", esp_err_to_name(err));
-        esp_timer_delete(s_ctx.timer);
-        s_ctx.timer = nullptr;
+    BaseType_t created =
+        xTaskCreate(sht30_poll_task, "sht30_poll", 3072, &s_ctx, 5, &s_ctx.task);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create SHT30 poll task");
+        s_ctx.config = nullptr;
         i2c_driver_delete(I2C_MASTER_NUM);
-        return err;
+        return ESP_ERR_NO_MEM;
     }
 
     s_ctx.is_initialized = true;
@@ -246,12 +241,7 @@ esp_err_t sht30_sensor_init(sht30_sensor_config_t *config)
              static_cast<unsigned long>(interval_ms));
 
     /* Push the first sample immediately so Matter attributes are not stale. */
-    if (config->temperature.cb) {
-        config->temperature.cb(config->temperature.endpoint_id, temp, config->user_data);
-    }
-    if (config->humidity.cb) {
-        config->humidity.cb(config->humidity.endpoint_id, humidity, config->user_data);
-    }
+    sht30_notify(config, temp, humidity);
 
     return ESP_OK;
 }

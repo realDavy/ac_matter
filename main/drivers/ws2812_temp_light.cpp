@@ -18,6 +18,10 @@
 #include <freertos/task.h>
 #include <led_strip.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static const char *TAG = "ws2812_temp";
 
 #if defined(CONFIG_WS2812_GPIO)
@@ -180,10 +184,11 @@ esp_err_t ws2812_temp_light_init(void)
 
 void ws2812_temp_light_set_enabled(bool enabled)
 {
+    /*
+     * Only flip the enable flag here. Clearing / refreshing is owned by the
+     * breath task so Matter callbacks never race RMT refresh.
+     */
     s_enabled.store(enabled);
-    if (!enabled && s_strip) {
-        led_strip_clear(s_strip);
-    }
     ESP_LOGI(TAG, "Temperature indicator %s", enabled ? "ON" : "OFF");
 }
 
