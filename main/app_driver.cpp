@@ -1160,6 +1160,10 @@ static void app_matter_apply_parsed_ac_state_now(
             esp_matter_invalid(nullptr);
         local_temp.type =
             ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+        /*
+         * No ambient sensor: report the commanded target as
+         * LocalTemperature so subscribed controllers stay consistent.
+         */
         local_temp.val.i16 = temp_x100;
 
         app_matter_log_update_error(
