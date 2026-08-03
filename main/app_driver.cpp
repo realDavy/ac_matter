@@ -767,6 +767,10 @@ static esp_err_t app_matter_update_display_temperature(
      * LocalTemperature is a nullable int16 attribute.
      * Even when writing a non-null value, the correct attribute type must
      * still be used.
+     *
+     * This hardware has no ambient sensor. The value reported here is the
+     * commanded target temperature so phone UIs have something to show; it
+     * is not a measured room temperature.
      */
     local_temp.type =
         ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
@@ -1156,6 +1160,10 @@ static void app_matter_apply_parsed_ac_state_now(
             esp_matter_invalid(nullptr);
         local_temp.type =
             ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+        /*
+         * No ambient sensor: report the commanded target as
+         * LocalTemperature so subscribed controllers stay consistent.
+         */
         local_temp.val.i16 = temp_x100;
 
         app_matter_log_update_error(
@@ -2802,6 +2810,14 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 				Key = 2;
 				uint8_t matter_mode = val->val.u8;
                 /*
+                 * Officially exposed Thermostat features are Cooling + Heating.
+                 * Off / Cool / Heat are the primary supported SystemMode values.
+                 *
+                 * Auto / FanOnly / Dry are still accepted when a controller
+                 * sends them (for example Home Assistant) and are mapped to
+                 * BC7215 modes. They are not declared as Thermostat features,
+                 * so Apple Home / Google Home typically will not offer them.
+                 *
                  * Matter SystemMode -> BC7215 Mode:
                  *   0 Off      -> Power=false, retain the previous Mode
                  *   1 Auto     -> Mode=0
