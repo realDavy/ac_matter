@@ -52,7 +52,7 @@ using namespace chip::app::Clusters;
 constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
 
-static constexpr const char *k_device_name = "Air AC Remote";
+static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 
 /**
@@ -97,7 +97,7 @@ static void app_ensure_serial_number()
     ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
 }
 
-/** Set default NodeLabel so controllers show "Air AC Remote" before the user renames it. */
+/** Set default NodeLabel so controllers show "AC Remote" before the user renames it. */
 static void app_set_default_node_label(node_t *node)
 {
     if (node == nullptr) {
