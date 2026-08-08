@@ -76,6 +76,17 @@ static void app_suspend_display_for_pase(void);
 static void app_start_sht30(void);
 static void app_start_ui_peripherals(void);
 
+static void app_schedule_work(chip::DeviceLayer::AsyncWorkFunct work,
+                              intptr_t arg = 0)
+{
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(work, arg);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG, "ScheduleWork failed: %" CHIP_ERROR_FORMAT, err.Format());
+        /* Event-handler context is already on the CHIP stack; run inline. */
+        work(arg);
+    }
+}
+
 /**
  * Ensure a persistent Matter SerialNumber exists.
  * Format: 8 random hex digits + last 4 hex digits of the Wi-Fi STA MAC.
@@ -270,14 +281,12 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionClosed:
         ESP_LOGI(TAG, "CHIPoBLE connection closed");
-        chip::DeviceLayer::PlatformMgr().ScheduleWork(
-            [](intptr_t /*arg*/) {
-                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
-                    !s_commissioning_in_progress) {
-                    app_start_pairing_display();
-                }
-            },
-            0);
+        app_schedule_work([](intptr_t /*arg*/) {
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
+                !s_commissioning_in_progress) {
+                app_start_pairing_display();
+            }
+        });
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
@@ -285,20 +294,17 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 		s_commissioning_in_progress = false;
 		app_driver_update_led_states();
         /* Restore LCD after PASE suspend; start SHT30 once fabric exists. */
-        chip::DeviceLayer::PlatformMgr().ScheduleWork(
-            [](intptr_t /*arg*/) { app_start_ui_peripherals(); }, 0);
+        app_schedule_work([](intptr_t /*arg*/) { app_start_ui_peripherals(); });
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
         ESP_LOGI(TAG, "Commissioning failed, fail safe timer expired");
         s_commissioning_in_progress = false;
-        chip::DeviceLayer::PlatformMgr().ScheduleWork(
-            [](intptr_t /*arg*/) {
-                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
-                    app_start_pairing_display();
-                }
-            },
-            0);
+        app_schedule_work([](intptr_t /*arg*/) {
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                app_start_pairing_display();
+            }
+        });
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
@@ -313,13 +319,11 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Commissioning session stopped");
         s_commissioning_in_progress = false;
         /* Failed / aborted session: show pairing QR again if still uncommissioned. */
-        chip::DeviceLayer::PlatformMgr().ScheduleWork(
-            [](intptr_t /*arg*/) {
-                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
-                    app_start_pairing_display();
-                }
-            },
-            0);
+        app_schedule_work([](intptr_t /*arg*/) {
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                app_start_pairing_display();
+            }
+        });
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
