@@ -655,14 +655,6 @@ extern "C" void app_main()
     /* Persist SerialNumber before Matter reads Basic Information */
     app_ensure_serial_number();
 
-    /*
-     * Log Wi-Fi disconnect reasons during Matter ConnectNetwork. BLE+WiFi
-     * coexistence often fails here; reason codes distinguish auth/password
-     * problems from RF coexist timeouts.
-     */
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &app_wifi_event_handler, nullptr));
-
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
     /* Button callbacks are registered inside init; handle is not needed here. */
@@ -882,6 +874,25 @@ extern "C" void app_main()
     /* Matter start */
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+
+    /*
+     * Register after Matter start: the default esp_event loop is created by
+     * the platform/Wi-Fi stack during start. Registering earlier returns
+     * ESP_ERR_INVALID_STATE and aborts into a boot loop.
+     *
+     * Log Wi-Fi disconnect reasons during Matter ConnectNetwork. BLE+WiFi
+     * coexistence often fails here; reason codes distinguish auth/password
+     * problems from RF coexist timeouts.
+     */
+    {
+        esp_err_t wifi_evt_err = esp_event_handler_register(
+            WIFI_EVENT, ESP_EVENT_ANY_ID, &app_wifi_event_handler, nullptr);
+        if (wifi_evt_err != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi event handler register failed: %s",
+                     esp_err_to_name(wifi_evt_err));
+        }
+    }
+
 	auto *interaction_engine =
 	    chip::app::InteractionModelEngine::GetInstance();
 	
