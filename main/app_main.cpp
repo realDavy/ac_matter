@@ -61,7 +61,8 @@ using namespace chip::app::Clusters;
 
 constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
-static bool s_ui_peripherals_started = false;
+static bool s_display_ui_started = false;
+static bool s_sht30_started = false;
 
 static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
@@ -70,6 +71,9 @@ static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
                                            void *user_data);
 static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct,
                                         void *user_data);
+static void app_start_pairing_display(void);
+static void app_suspend_display_for_pase(void);
+static void app_start_sht30(void);
 static void app_start_ui_peripherals(void);
 
 /**
@@ -253,27 +257,69 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 		app_driver_update_led_states();
         break;
 
+    case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionEstablished:
+        ESP_LOGI(TAG, "CHIPoBLE connection established");
+        /*
+         * Subscribe arrives just before PBKDF/PASE. Drop LVGL immediately so
+         * PacketBuffers / SPAKE2+ have heap. QR was already visible for scan.
+         */
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+            app_suspend_display_for_pase();
+        }
+        break;
+
+    case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionClosed:
+        ESP_LOGI(TAG, "CHIPoBLE connection closed");
+        chip::DeviceLayer::PlatformMgr().ScheduleWork(
+            [](intptr_t /*arg*/) {
+                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
+                    !s_commissioning_in_progress) {
+                    app_start_pairing_display();
+                }
+            },
+            0);
+        break;
+
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
 		s_commissioning_in_progress = false;
 		app_driver_update_led_states();
-        /* LCD/SHT30 were deferred so PASE had enough heap. */
+        /* Restore LCD after PASE suspend; start SHT30 once fabric exists. */
         chip::DeviceLayer::PlatformMgr().ScheduleWork(
             [](intptr_t /*arg*/) { app_start_ui_peripherals(); }, 0);
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
         ESP_LOGI(TAG, "Commissioning failed, fail safe timer expired");
+        s_commissioning_in_progress = false;
+        chip::DeviceLayer::PlatformMgr().ScheduleWork(
+            [](intptr_t /*arg*/) {
+                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                    app_start_pairing_display();
+                }
+            },
+            0);
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
         ESP_LOGI(TAG, "Commissioning session started");
 		s_commissioning_in_progress = true;
 		app_driver_update_led_states();
+        /* Backup: free display if BLE-subscribe suspend did not run. */
+        app_suspend_display_for_pase();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
         ESP_LOGI(TAG, "Commissioning session stopped");
+        s_commissioning_in_progress = false;
+        /* Failed / aborted session: show pairing QR again if still uncommissioned. */
+        chip::DeviceLayer::PlatformMgr().ScheduleWork(
+            [](intptr_t /*arg*/) {
+                if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                    app_start_pairing_display();
+                }
+            },
+            0);
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
@@ -474,18 +520,16 @@ static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct
 }
 
 /*
- * LCD + touch UI + SHT30 are heavy. During first-time commissioning, Matter
- * PASE/BLE already starves the heap (PacketBuffer EMPTY / false PASE ac).
- * Start these only after a fabric exists, or right after commissioning.
+ * Show Matter QR / manual code on the round LCD before first commission.
+ * SHT30 stays deferred — it is not needed for pairing and costs heap/I2C.
  */
-static void app_start_ui_peripherals(void)
+static void app_start_pairing_display(void)
 {
-    if (s_ui_peripherals_started) {
+    if (s_display_ui_started) {
         return;
     }
-    s_ui_peripherals_started = true;
 
-    ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
+    ESP_LOGI(TAG, "Starting pairing display (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
 
     esp_err_t err = board_i2c_init();
@@ -494,14 +538,39 @@ static void app_start_ui_peripherals(void)
     }
 
     err = display_init();
-    if (err == ESP_OK) {
-        err = ui_init();
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
-        }
-    } else {
+    if (err != ESP_OK) {
         ESP_LOGW(TAG, "Display init failed: %s", esp_err_to_name(err));
+        return;
     }
+
+    err = ui_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
+        display_suspend_lvgl();
+        return;
+    }
+
+    s_display_ui_started = true;
+}
+
+static void app_suspend_display_for_pase(void)
+{
+    if (!s_display_ui_started && !display_is_ready()) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Releasing display heap for Matter PASE");
+    ui_deinit();
+    display_suspend_lvgl();
+    s_display_ui_started = false;
+}
+
+static void app_start_sht30(void)
+{
+    if (s_sht30_started) {
+        return;
+    }
+    s_sht30_started = true;
 
     static sht30_sensor_config_t sht30_config = {
         .temperature = {
@@ -515,7 +584,7 @@ static void app_start_ui_peripherals(void)
         .user_data = nullptr,
         .interval_ms = 5000,
     };
-    err = sht30_sensor_init(&sht30_config);
+    esp_err_t err = sht30_sensor_init(&sht30_config);
     if (err == ESP_OK) {
         app_driver_set_ambient_sensor_active(true);
         ESP_LOGI(TAG, "SHT30 ambient sensor active");
@@ -525,6 +594,15 @@ static void app_start_ui_peripherals(void)
                  "SHT30 not available (%s); LocalTemperature will mirror setpoints",
                  esp_err_to_name(err));
     }
+}
+
+/* Full post-commission bring-up: LCD/UI (again if suspended) + SHT30. */
+static void app_start_ui_peripherals(void)
+{
+    ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+    app_start_pairing_display();
+    app_start_sht30();
 }
 
 static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -833,15 +911,14 @@ extern "C" void app_main()
 	}
 
 	/*
-	 * Keep LCD/SHT30 off until a fabric exists so BLE PASE has enough heap.
+	 * Uncommissioned: show pairing QR on LCD now. LVGL is suspended when the
+	 * commissioning session starts so BLE PASE still has enough heap.
+	 * SHT30 waits until a fabric exists.
 	 */
 	if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
 	    app_start_ui_peripherals();
 	} else {
-	    ESP_LOGW(TAG,
-	             "Deferring LCD/SHT30 until commissioning completes "
-	             "(free heap=%u)",
-	             static_cast<unsigned>(esp_get_free_heap_size()));
+	    app_start_pairing_display();
 	}
 
 #if CONFIG_ENABLE_CHIP_SHELL

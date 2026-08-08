@@ -19,10 +19,17 @@ static const char *TAG = "display";
 static esp_lcd_panel_io_handle_t s_io = nullptr;
 static esp_lcd_panel_handle_t s_panel = nullptr;
 static lv_disp_t *s_disp = nullptr;
+static bool s_hw_ready = false;
 static bool s_ready = false;
+static bool s_touch_indev_added = false;
+static bool s_backlight_inited = false;
 
 static void backlight_init(void)
 {
+    if (s_backlight_inited) {
+        return;
+    }
+
     ledc_timer_config_t timer = {};
     timer.speed_mode = LEDC_LOW_SPEED_MODE;
     timer.duty_resolution = LEDC_TIMER_8_BIT;
@@ -40,10 +47,14 @@ static void backlight_init(void)
     channel.duty = 0;
     channel.hpoint = 0;
     ledc_channel_config(&channel);
+    s_backlight_inited = true;
 }
 
 void display_set_backlight(bool on)
 {
+    if (!s_backlight_inited) {
+        return;
+    }
     const uint32_t duty = on ? 200 : 0;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
@@ -68,9 +79,9 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     data->state = LV_INDEV_STATE_PRESSED;
 }
 
-esp_err_t display_init(void)
+static esp_err_t display_init_hw(void)
 {
-    if (s_ready) {
+    if (s_hw_ready) {
         return ESP_OK;
     }
 
@@ -84,7 +95,8 @@ esp_err_t display_init(void)
     bus_config.sclk_io_num = BOARD_LCD_SCLK_GPIO;
     bus_config.quadwp_io_num = -1;
     bus_config.quadhd_io_num = -1;
-    bus_config.max_transfer_sz = BOARD_LCD_H_RES * 80 * sizeof(uint16_t);
+    /* Match the largest LVGL draw buffer we try (20 lines). */
+    bus_config.max_transfer_sz = BOARD_LCD_H_RES * 20 * sizeof(uint16_t);
     ESP_ERROR_CHECK(spi_bus_initialize(BOARD_LCD_HOST, &bus_config, SPI_DMA_CH_AUTO));
 
     ESP_LOGI(TAG, "Install panel IO");
@@ -113,6 +125,19 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
+    s_hw_ready = true;
+    return ESP_OK;
+}
+
+static esp_err_t display_start_lvgl(void)
+{
+    if (s_ready) {
+        return ESP_OK;
+    }
+    if (!s_hw_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /*
      * Probe before lvgl_port_init(): that call starts an LVGL task even when
      * the later draw-buffer allocation fails, permanently wasting RAM.
@@ -133,7 +158,9 @@ esp_err_t display_init(void)
     }
     heap_caps_free(probe);
 
-    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    /* Default 7168 is too heavy alongside Matter + CHIPoBLE on S3 without PSRAM. */
+    lvgl_cfg.task_stack = 4096;
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
     /*
@@ -177,30 +204,67 @@ esp_err_t display_init(void)
         return ESP_FAIL;
     }
 
-    esp_err_t touch_err = it7259_init();
-    if (touch_err == ESP_OK) {
+    if (!s_touch_indev_added) {
+        esp_err_t touch_err = it7259_init();
+        if (touch_err == ESP_OK) {
 #if LVGL_VERSION_MAJOR >= 9
-        lv_indev_t *indev = lv_indev_create();
-        lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-        lv_indev_set_read_cb(indev, touch_read_cb);
-        lv_indev_set_display(indev, s_disp);
+            lv_indev_t *indev = lv_indev_create();
+            lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(indev, touch_read_cb);
+            lv_indev_set_display(indev, s_disp);
 #else
-        static lv_indev_drv_t indev_drv;
-        lv_indev_drv_init(&indev_drv);
-        indev_drv.type = LV_INDEV_TYPE_POINTER;
-        indev_drv.read_cb = touch_read_cb;
-        indev_drv.disp = s_disp;
-        lv_indev_drv_register(&indev_drv);
+            static lv_indev_drv_t indev_drv;
+            lv_indev_drv_init(&indev_drv);
+            indev_drv.type = LV_INDEV_TYPE_POINTER;
+            indev_drv.read_cb = touch_read_cb;
+            indev_drv.disp = s_disp;
+            lv_indev_drv_register(&indev_drv);
 #endif
-    } else {
-        ESP_LOGW(TAG, "Touch unavailable (%s); UI is display-only",
-                 esp_err_to_name(touch_err));
+            s_touch_indev_added = true;
+        } else {
+            ESP_LOGW(TAG, "Touch unavailable (%s); UI is display-only",
+                     esp_err_to_name(touch_err));
+        }
     }
 
     display_set_backlight(true);
     s_ready = true;
     ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d)", BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     return ESP_OK;
+}
+
+esp_err_t display_init(void)
+{
+    esp_err_t err = display_init_hw();
+    if (err != ESP_OK) {
+        return err;
+    }
+    return display_start_lvgl();
+}
+
+void display_suspend_lvgl(void)
+{
+    if (!s_ready && s_disp == nullptr) {
+        display_set_backlight(false);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Suspending LVGL to free heap for Matter PASE (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+
+    display_set_backlight(false);
+
+    if (s_disp != nullptr) {
+        (void)lvgl_port_remove_disp(s_disp);
+        s_disp = nullptr;
+    }
+    (void)lvgl_port_deinit();
+    s_ready = false;
+    /* Touch indev belongs to LVGL; recreate after the next start. */
+    s_touch_indev_added = false;
+
+    ESP_LOGI(TAG, "LVGL suspended (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
 }
 
 lv_disp_t *display_get_disp(void)

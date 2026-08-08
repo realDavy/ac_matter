@@ -31,6 +31,8 @@ enum class ui_screen_t : uint8_t {
 
 static std::atomic<bool> s_english{false};
 static std::atomic<bool> s_ready{false};
+static std::atomic<bool> s_stop_task{false};
+static TaskHandle_t s_task = nullptr;
 static ui_screen_t s_screen = ui_screen_t::PAIRING;
 
 static lv_obj_t *s_root = nullptr;
@@ -497,8 +499,8 @@ static void ui_task(void *arg)
     ui_screen_t last = static_cast<ui_screen_t>(0xFF);
     uint32_t ticks = 0;
 
-    while (true) {
-        if (lvgl_port_lock(50)) {
+    while (!s_stop_task.load()) {
+        if (display_is_ready() && lvgl_port_lock(50)) {
             const ui_screen_t next = decide_screen();
             if (next != last) {
                 if (next != ui_screen_t::LEARN) {
@@ -522,6 +524,9 @@ static void ui_task(void *arg)
         }
         vTaskDelay(pdMS_TO_TICKS(400));
     }
+
+    s_task = nullptr;
+    vTaskDelete(nullptr);
 }
 
 esp_err_t ui_init(void)
@@ -534,19 +539,63 @@ esp_err_t ui_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    s_root = nullptr;
+    s_screen = ui_screen_t::PAIRING;
+
     if (lvgl_port_lock(1000)) {
         build_ui();
         apply_screen(decide_screen());
         lvgl_port_unlock();
     }
 
-    if (xTaskCreate(ui_task, "ui_task", 8192, nullptr, 4, nullptr) != pdPASS) {
+    s_stop_task.store(false);
+    /* Pairing / AC refresh loops are light; keep stack small for PASE heap. */
+    if (xTaskCreate(ui_task, "ui_task", 4096, nullptr, 4, &s_task) != pdPASS) {
+        s_task = nullptr;
         return ESP_ERR_NO_MEM;
     }
 
     s_ready.store(true);
     ESP_LOGI(TAG, "UI ready (default language: Chinese)");
     return ESP_OK;
+}
+
+void ui_deinit(void)
+{
+    if (!s_ready.load() && s_task == nullptr) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Stopping UI task");
+    s_stop_task.store(true);
+    s_ready.store(false);
+
+    /*
+     * Must be safe on the CHIP event loop: do not block. Force-delete the UI
+     * task; LVGL is torn down immediately afterwards by display_suspend_lvgl().
+     */
+    TaskHandle_t task = s_task;
+    s_task = nullptr;
+    if (task != nullptr) {
+        vTaskDelete(task);
+    }
+
+    s_root = nullptr;
+    s_title = nullptr;
+    s_subtitle = nullptr;
+    s_qr_img = nullptr;
+    s_code_label = nullptr;
+    s_btn_primary = nullptr;
+    s_btn_primary_label = nullptr;
+    s_btn_power = nullptr;
+    s_btn_power_label = nullptr;
+    s_btn_down = nullptr;
+    s_btn_up = nullptr;
+    s_temp_label = nullptr;
+    s_mode_list = nullptr;
+    s_brightness = nullptr;
+    s_lang_btn = nullptr;
+    s_hint = nullptr;
 }
 
 void ui_update(void) {}

@@ -8,6 +8,10 @@ extern "C" {
 #endif
 
 esp_err_t ui_init(void);
+
+/** Stop the UI task so LVGL can be suspended for Matter PASE. */
+void ui_deinit(void);
+
 void ui_tick(void); /* optional; LVGL port owns timer */
 
 /** Refresh screens from Matter / IR / light state. Safe to call often. */

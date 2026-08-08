@@ -283,7 +283,7 @@ python3 scripts/gen_user_manual_pdf.py
 ### 1. Matter 配网（手机 / 屏上扫码）
 
 1. 手机与设备使用 **2.4 GHz** Wi‑Fi。
-2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**，与串口 onboarding 打印一致。
+2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**，与串口 onboarding 打印一致。手机 BLE 连上后圆屏会暂时关闭以腾出内存完成配对，配网成功后再亮起。
 3. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件并扫屏上码（或输入数字码）。
 4. DIY 固件通常会提示“未认证设备”，按指引继续即可。
 
