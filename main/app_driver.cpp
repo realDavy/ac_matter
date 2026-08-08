@@ -1029,7 +1029,13 @@ static void app_matter_log_update_error(
 }
 
 /*
- * Update all Fan Control attributes as one logical state.
+ * Update all Fan endpoint attributes as one logical state.
+ *
+ * The Fan device type includes OnOff as well as FanControl. Apple Home treats
+ * OnOff as the master switch for the vertical fan slider: while OnOff is Off,
+ * PercentCurrent is shown as 0% even if FanMode/PercentSetting were updated.
+ * Keep OnOff aligned with FanMode so power-on restores a visible non-zero
+ * speed (default Low / 25%).
  *
  * The previous synchronization guard is restored so this helper can be used
  * both from a standalone scheduled lambda and from another local update block.
@@ -1043,6 +1049,21 @@ static void app_matter_update_fan_endpoint_state_now(
 
     s_matter_syncing_from_local = true;
 
+    const bool fan_on =
+        matter_fan_mode !=
+        static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
+
+    esp_matter_attr_val_t on_off_val =
+        esp_matter_bool(fan_on);
+
+    app_matter_log_update_error(
+        "Fan OnOff",
+        attribute::update(
+            fan_endpoint_id,
+            OnOff::Id,
+            OnOff::Attributes::OnOff::Id,
+            &on_off_val));
+
     esp_matter_attr_val_t fan_mode_val =
         esp_matter_enum8(matter_fan_mode);
 
@@ -1054,8 +1075,16 @@ static void app_matter_update_fan_endpoint_state_now(
             FanControl::Attributes::FanMode::Id,
             &fan_mode_val));
 
+    /*
+     * With OnOff present, PercentCurrent is the value Home's slider reads for
+     * the live speed. Force 0% when Off; otherwise publish the normalized
+     * percentage that matches FanMode (25 / 50 / 100).
+     */
+    const uint8_t percent_current_value =
+        fan_on ? fan_percent : static_cast<uint8_t>(0);
+
     esp_matter_attr_val_t percent_current =
-        esp_matter_uint8(fan_percent);
+        esp_matter_uint8(percent_current_value);
 
     app_matter_log_update_error(
         "PercentCurrent",
@@ -1066,7 +1095,7 @@ static void app_matter_update_fan_endpoint_state_now(
             &percent_current));
 
     esp_matter_attr_val_t percent_setting =
-        esp_matter_nullable_uint8(fan_percent);
+        esp_matter_nullable_uint8(percent_current_value);
 
     app_matter_log_update_error(
         "PercentSetting",
@@ -1081,9 +1110,10 @@ static void app_matter_update_fan_endpoint_state_now(
 
     ESP_LOGI(
         TAG,
-        "Fan endpoint synchronized: FanMode=%u Percent=%u",
+        "Fan endpoint synchronized: OnOff=%s FanMode=%u Percent=%u",
+        fan_on ? "On" : "Off",
         static_cast<unsigned>(matter_fan_mode),
-        static_cast<unsigned>(fan_percent));
+        static_cast<unsigned>(percent_current_value));
 }
 
 /*
@@ -2527,7 +2557,31 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
             }
 		}
 	}
-	// Branch 3: handle fan speed (Fan Control cluster)
+	// Branch 3: Fan endpoint (OnOff master switch + Fan Control)
+    else if (endpoint_id == fan_endpoint_id &&
+             cluster_id == OnOff::Id) {
+
+        if (attribute_id == OnOff::Attributes::OnOff::Id) {
+            PowerOn = val->val.b;
+            Key = 4;
+
+            ESP_LOGI(
+                TAG,
+                "Fan OnOff %s received: turning whole device %s",
+                PowerOn ? "On" : "Off",
+                PowerOn ? "On" : "Off");
+
+            /*
+             * Fan OnOff is coupled to the appliance. Turning the fan On
+             * restores Thermostat SystemMode from the retained Mode and
+             * republishes FanMode + percent (default Low / 25%).
+             */
+            app_matter_schedule_whole_device_state(
+                PowerOn,
+                Mode,
+                Fan);
+        }
+    }
     else if (endpoint_id == fan_endpoint_id &&
              cluster_id == FanControl::Id) {
 
@@ -2727,14 +2781,15 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
 
     /*
      * Force a deterministic whole-device startup state:
-     *   Room AC OnOff        = Off
+     *   Room AC OnOff         = Off
      *   Thermostat SystemMode = Off
-     *   FanMode              = Off
-     *   PercentSetting       = 0%
-     *   PercentCurrent       = 0%
+     *   Fan OnOff             = Off
+     *   FanMode               = Off
+     *   PercentSetting        = 0%
+     *   PercentCurrent        = 0%
      *
      * Keep the last/default IR fan level at Low for the next power-on
-     * or non-zero fan-speed command.
+     * or non-zero fan-speed command (Matter Low / 25%).
      */
     PowerOn = false;
     Mode = 1;
@@ -2798,46 +2853,20 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
             Thermostat::Attributes::SystemMode::Id,
             &system_mode_val));
 
-    esp_matter_attr_val_t fan_mode_val =
-        esp_matter_enum8(
-            static_cast<uint8_t>(
-                FanControl::FanModeEnum::kOff));
-
-    record_error(
-        "FanMode",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::FanMode::Id,
-            &fan_mode_val));
-
-    esp_matter_attr_val_t percent_current =
-        esp_matter_uint8(0);
-
-    record_error(
-        "PercentCurrent",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::PercentCurrent::Id,
-            &percent_current));
-
-    esp_matter_attr_val_t percent_setting =
-        esp_matter_nullable_uint8(0);
-
-    record_error(
-        "PercentSetting",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::PercentSetting::Id,
-            &percent_setting));
+    /*
+     * Publish the complete fan endpoint Off state (OnOff + FanControl).
+     * Internal Fan remains Low so the next power-on restores 25%.
+     */
+    app_matter_update_fan_endpoint_state_now(
+        static_cast<uint8_t>(FanControl::FanModeEnum::kOff),
+        0);
 
     s_matter_syncing_from_local = false;
 
     ESP_LOGI(
         TAG,
-        "Initial whole-device state forced to Off");
+        "Initial whole-device state forced to Off "
+        "(default fan on next power-on: Low/25%%)");
 
     return first_error;
 }
