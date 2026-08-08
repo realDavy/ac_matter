@@ -761,7 +761,7 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
     }
 
     /*
-     * OnOff, Thermostat SystemMode and the separate Fan endpoint all
+     * OnOff, Thermostat SystemMode and FanControl on the Room AC endpoint
      * represent the same physical appliance. Publish one complete state so
      * every subscribed controller sees consistent values.
      *
@@ -2544,8 +2544,8 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 if (Key >= 0) {
                     /*
                      * Publish the complete logical appliance state. Off keeps
-                     * Mode unchanged; a non-Off mode restores both the Room AC
-                     * and Fan endpoint to On consistently.
+                     * Mode unchanged; a non-Off mode restores OnOff,
+                     * SystemMode and FanControl consistently.
                      */
                     app_matter_schedule_whole_device_state(
                         PowerOn,
