@@ -499,7 +499,6 @@ void app_driver_led_set_mode(led_display_mode_t mode)
 
 static std::unique_ptr<ir_ac::IrAcController> s_ac;
 static bool s_matter_syncing_from_local = false;
-static int16_t s_target_temperature_x100 = 2200;
 static TaskHandle_t s_ir_worker_task_handle = nullptr;
 static TaskHandle_t s_factory_reset_task_handle = nullptr;
 static QueueHandle_t s_ir_command_queue = nullptr;
@@ -2580,26 +2579,6 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 esp_err_to_name(queue_err));
         }
     }
-    return err;
-}
-
-static esp_err_t app_matter_update_target_temperature(int16_t temp_x100, bool cooling)
-{
-    uint32_t attr_id = cooling
-        ? Thermostat::Attributes::OccupiedCoolingSetpoint::Id
-        : Thermostat::Attributes::OccupiedHeatingSetpoint::Id;
-
-    esp_matter_attr_val_t val = esp_matter_int16(temp_x100);
-
-    s_matter_syncing_from_local = true;
-    esp_err_t err = attribute::update(
-        room_air_conditioner_endpoint_id,
-        Thermostat::Id,
-        attr_id,
-        &val
-    );
-    s_matter_syncing_from_local = false;
-
     return err;
 }
 
