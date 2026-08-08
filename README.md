@@ -136,11 +136,70 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 
 ## 固件编译与烧录
 
-### 环境
+### 环境（一次性装好，避免 `idf.py` / `gn` / 组件仓库问题）
 
-- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/)（与所用 [ESP-Matter](https://github.com/espressif/esp-matter) 版本匹配）
-- 已安装并配置好 `ESP_MATTER_PATH`、`IDF_PATH`
+依赖：
+
+- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/)（与所用 [ESP-Matter](https://github.com/espressif/esp-matter) 版本匹配；本工程日志常见 IDF **v5.5.3**）
+- 已 clone 的 [ESP-Matter](https://github.com/espressif/esp-matter)（含 `connectedhomeip` 子模块）
 - 目标芯片：`esp32s3`
+
+本工程常见编译失败与根因：
+
+| 报错 | 原因 | 处理 |
+|------|------|------|
+| `idf.py: command not found` | 未 source IDF | `. $IDF_PATH/export.sh` |
+| `Cannot establish a connection to the component registry` / `components-file.espressif.com` | 国内访问官方组件源失败 | `export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn` |
+| `The 'gn' command was not found` | 未安装 / 未 source ESP-Matter | 在已 source IDF 后执行 `esp-matter/install.sh`，再 `. $ESP_MATTER_PATH/export.sh` |
+
+#### 一次安装（本机只需成功跑一遍）
+
+路径按你机器修改（下面与 `~/esp-adf/esp-idf/esp-matter/examples/ac_matter` 布局一致）：
+
+```bash
+export IDF_PATH=~/esp-adf/esp-idf
+export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
+export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+
+# 1) IDF 工具链（若早已 install 过可跳过）
+cd "$IDF_PATH"
+./install.sh esp32s3
+. ./export.sh
+
+# 2) Matter 主机工具（安装 gn 等；必须先 source 过 IDF）
+cd "$ESP_MATTER_PATH"
+./install.sh
+. ./export.sh
+
+# 3) 自检
+which idf.py && which gn && gn --version
+```
+
+仓库内也提供封装脚本（路径相对本仓库根目录）：
+
+```bash
+# 在 ac_matter 仓库根目录
+bash scripts/setup_build_env.sh --install
+```
+
+#### 每次新开终端（编译前必做）
+
+```bash
+export IDF_PATH=~/esp-adf/esp-idf
+export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
+export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+. "$IDF_PATH/export.sh"
+. "$ESP_MATTER_PATH/export.sh"
+# 或：. /path/to/ac_matter/scripts/setup_build_env.sh
+```
+
+建议写入 `~/.bashrc`（永久生效镜像与路径；`export.sh` 仍建议每次编译前手动 source，避免污染所有终端）：
+
+```bash
+export IDF_PATH=~/esp-adf/esp-idf
+export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
+export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+```
 
 ### 获取源码
 
@@ -157,9 +216,12 @@ cd ac_matter
 git submodule update --init --recursive
 ```
 
+若工程放在 `esp-matter/examples/ac_matter` 下，确保已 `git pull` 到含 `MAX_DYNAMIC_ENDPOINT_COUNT=8` 的最新 `main`。
+
 ### 编译烧录
 
 ```bash
+# 先完成上一节环境 source，确认 which gn / which idf.py 都有输出
 idf.py set-target esp32s3
 idf.py menuconfig    # 确认 MAX_DYNAMIC_ENDPOINT_COUNT≥8；可改 SHT30/WS2812 引脚
 idf.py build
@@ -167,6 +229,13 @@ idf.py -p <串口> erase-flash flash monitor
 ```
 
 首次建议 `erase-flash`，避免旧分区/配网数据干扰。
+
+组件拉失败时清缓存再试：
+
+```bash
+rm -rf build managed_components dependencies.lock
+idf.py set-target esp32s3
+```
 
 ### 可配置项
 
@@ -177,12 +246,12 @@ idf.py -p <串口> erase-flash flash monitor
 | 状态 LED | `BOARD_STATUS_LED_GPIO` | GPIO11（active-low） |
 | SHT30 / 触摸 I2C | menuconfig → **SHT30…** 或 `board_pins.h` | SDA=8 / SCL=9 / ADDR=0x44 |
 | WS2812 DIN | menuconfig → **WS2812…** | GPIO10 |
-| 动态端点数 | `sdkconfig.defaults` → `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` | **4** |
+| 动态端点数 | `sdkconfig.defaults` → `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` | **8** |
 | Manufacturer / 设备名 | `main/CHIPProjectConfig.h`、`CMakeLists.txt` | `aidaegis` / `AC Remote` |
 | 序列号 | 运行时写入 chip-factory（`serial-num`） | 随机 8 位 + MAC 后 4 位 |
 | Flash / 分区 | `sdkconfig.defaults`、`partitions.csv` | 16 MB，OTA 双区各约 6 MB |
 
-依赖组件（见 `main/idf_component.yml`）：`espressif/led_strip`、`espressif/esp_lcd_gc9a01`、`espressif/esp_lvgl_port`、`lvgl/lvgl`。首次构建会从组件仓库拉取。
+依赖组件（见 `main/idf_component.yml`）：`espressif/led_strip`、`espressif/esp_lcd_gc9a01`、`espressif/esp_lvgl_port`、`lvgl/lvgl`。首次构建会从组件仓库拉取（国内请用上面的 `.cn` 镜像）。
 
 ### 分区与版本
 
