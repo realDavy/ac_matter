@@ -233,7 +233,8 @@ class ManualDoc:
         self.doc.add_page_break()
 
     def cover(self) -> None:
-        self.fig(img("product_hero_desk_pdf.jpg"), width_cm=16.5)
+        # Official hero render is portrait — keep width modest so title block fits.
+        self.fig(img("product_hero_desk_pdf.jpg"), width_cm=9.5)
 
         for text, size, bold, color, after in [
             ("aidaegis", 26, True, C_NAVY, 2),
@@ -386,7 +387,7 @@ def build() -> Path:
     )
     m.fig(
         img("product_hero_desk_pdf.jpg"),
-        width_cm=15.0,
+        width_cm=9.0,
         caption="图 3-1  建议放置于床头柜、书桌等稳定平面",
     )
     m.note(

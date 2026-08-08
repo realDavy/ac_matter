@@ -81,15 +81,22 @@ class ManualPDF(FPDF):
         self.set_x(self.l_margin)
 
     def cover(self) -> None:
-        self.add_page()
-        # Hero product image
-        hero = img("product_hero_desk_pdf.jpg")
-        iw = self.epw
-        ih = iw * 1024 / 1536
-        self.image(str(hero), x=self.l_margin, y=22, w=iw, h=ih)
+        from PIL import Image as PILImage
 
-        y = 22 + ih + 10
-        self.set_y(y)
+        self.add_page()
+        # Official product hero render (may be portrait)
+        hero = img("product_hero_desk_pdf.jpg")
+        with PILImage.open(hero) as im:
+            px_w, px_h = im.size
+        max_h = 155.0  # mm — leave room for title block
+        max_w = self.epw
+        scale = min(max_w / px_w, max_h / px_h)
+        iw = px_w * scale
+        ih = px_h * scale
+        x = self.l_margin + (self.epw - iw) / 2
+        self.image(str(hero), x=x, y=18, w=iw, h=ih)
+
+        self.set_y(18 + ih + 8)
         self.set_font("cn", "B", 26)
         self.set_text_color(*C_NAVY)
         self.set_x(self.l_margin)
@@ -102,12 +109,12 @@ class ManualPDF(FPDF):
         self.set_line_width(0.45)
         cy = self.get_y()
         self.line(78, cy, 132, cy)
-        self.ln(7)
+        self.ln(6)
         self.set_font("cn", "", 14)
         self.set_text_color(*C_TEXT)
         self.set_x(self.l_margin)
         self.multi_cell(self.epw, 8, "智能空调控制器  ·  用户说明书", align="C")
-        self.ln(4)
+        self.ln(3)
         self.set_font("cn", "", 10)
         self.set_text_color(*C_MUTED)
         self.set_x(self.l_margin)
@@ -118,7 +125,7 @@ class ManualPDF(FPDF):
             "圆屏触控 · Matter 本地控制 · 氛围光环",
             align="C",
         )
-        self.set_y(-28)
+        self.set_y(-24)
         self.set_font("cn", "", 9)
         self.set_text_color(*C_MUTED)
         self.set_x(self.l_margin)
@@ -454,7 +461,7 @@ def build() -> Path:
     )
     pdf.fig(
         img("product_hero_desk_pdf.jpg"),
-        width=pdf.epw * 0.88,
+        width=85,
         caption="图 3-1  建议放置于床头柜、书桌等稳定平面",
     )
     pdf.note(

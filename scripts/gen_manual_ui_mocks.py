@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Composite firmware-accurate round-screen UI onto the product render.
+"""Composite firmware-accurate round-screen UI onto the official product render.
 
-Important: do NOT invent a different product chassis. Always reuse
-img/manual/product_studio_front_pdf.jpg (Aura Ring form factor) and only
-replace the nested circular display pixels.
+Uses the user-provided studio render (product_studio_front_pdf.jpg derived from
+docs/product_studio_user.jpg). Only the nested circular display pixels are
+replaced — product housing / ring / base are never redrawn.
 """
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import qrcode
@@ -19,8 +18,8 @@ OUT = ROOT / "img" / "manual"
 PRODUCT = OUT / "product_studio_front_pdf.jpg"
 FONT_PATH = Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")
 
-# Nested circular display on product_studio_front_pdf.jpg (do not change housing)
-SCX, SCY, SR = 508, 628, 125
+# Calibrated on product_studio_user.jpg → product_studio_front_pdf.jpg
+SCX, SCY, SR = 395, 555, 118
 
 
 def font(size: int) -> ImageFont.FreeTypeFont:
@@ -64,11 +63,11 @@ def make_screen(size: int, kind: str) -> Image.Image:
         qr.add_data("MT:Y.K9042C00KA0648G00")
         qr.make(fit=True)
         q = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        qsz = S(88)
+        qsz = S(86)
         q = q.resize((qsz, qsz), Image.Resampling.NEAREST)
         im.paste(q, (cx - qsz // 2, cy - qsz // 2 - S(6)))
-        text_center(d, (cx, size - S(52)), "配对码", font(max(10, S(12))), (208, 228, 240))
-        text_center(d, (cx, size - S(32)), "34970112345", font(max(10, S(12))), (208, 228, 240))
+        text_center(d, (cx, size - S(50)), "配对码", font(max(10, S(12))), (208, 228, 240))
+        text_center(d, (cx, size - S(30)), "34970112345", font(max(10, S(12))), (208, 228, 240))
     elif kind == "learn":
         text_center(d, (cx, S(28)), "红外学习", font(max(14, S(18))), (232, 241, 248))
         text_center(d, (cx, S(52)), "对准遥控按任意键", font(max(11, S(13))), (155, 180, 196))
@@ -131,7 +130,6 @@ def main() -> None:
         composite("ac", "ui_ac_on_device_pdf.jpg"),
         composite("light", "ui_light_on_device_pdf.jpg"),
     ]
-    # aliases
     for src, dst in [
         ("ui_pairing_on_device_pdf.jpg", "ui_pairing_actual.jpg"),
         ("ui_learn_on_device_pdf.jpg", "ui_learn_actual.jpg"),
