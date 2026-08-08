@@ -232,6 +232,7 @@ class ManualPDF(FPDF):
         gap: float = 6,
         width: float | None = None,
     ) -> None:
+        """Place figures in equal-width cells, vertically centered for a level row."""
         n = len(paths)
         assert n == len(captions) and n >= 2
         w = width if width is not None else (self.epw - gap * (n - 1)) / n
@@ -250,14 +251,19 @@ class ManualPDF(FPDF):
         x0 = self.l_margin
         for i, (p, cap) in enumerate(zip(paths, captions)):
             x = x0 + i * (w + gap)
-            self.image(str(p), x=x, y=y0, w=w, h=heights[i])
-        self.set_y(y0 + h + 1)
+            # Vertically center shorter images so bottoms/captions stay level.
+            y = y0 + (h - heights[i]) / 2
+            self.image(str(p), x=x, y=y, w=w, h=heights[i])
+        self.set_y(y0 + h + 1.5)
         self.set_font("cn", "", 8)
         self.set_text_color(*C_MUTED)
+        cap_y = self.get_y()
+        cap_h = 5.0  # fixed band so captions stay on one baseline
         for i, cap in enumerate(captions):
             x = x0 + i * (w + gap)
-            self.set_xy(x, self.get_y())
-            self.multi_cell(w, 4.5, cap, align="C")
+            self.set_xy(x, cap_y)
+            self.cell(w, cap_h, cap, align="C")
+        self.set_y(cap_y + cap_h)
         self._reset_x()
         self.set_text_color(*C_TEXT)
         self.ln(3)
