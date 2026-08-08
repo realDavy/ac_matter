@@ -40,6 +40,8 @@
 
 #include <app/server/CommissioningWindowManager.h>
 #include <app/server/Server.h>
+#include <platform/CommissionableDataProvider.h>
+#include <setup_payload/OnboardingCodesUtil.h>
 
 static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
@@ -57,6 +59,66 @@ static bool s_commissioning_in_progress = false;
 
 static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
+
+/**
+ * Always dump the live Matter onboarding payload to the serial console.
+ * Display/UI init is best-effort and may fail under RAM pressure; pairing
+ * must not depend on the round LCD coming up.
+ */
+static void app_log_onboarding_codes()
+{
+    const auto flags =
+        chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE);
+
+    PrintOnboardingCodes(flags);
+
+    auto *provider = chip::DeviceLayer::GetCommissionableDataProvider();
+    if (provider != nullptr) {
+        uint16_t discriminator = 0;
+        uint32_t passcode = 0;
+        if (provider->GetSetupDiscriminator(discriminator) == CHIP_NO_ERROR) {
+            ESP_LOGI(TAG, "Setup discriminator: %u", discriminator);
+        } else {
+            ESP_LOGW(TAG, "Failed to read setup discriminator");
+        }
+        if (provider->GetSetupPasscode(passcode) == CHIP_NO_ERROR) {
+            ESP_LOGI(TAG, "Setup passcode (PIN): %lu",
+                     static_cast<unsigned long>(passcode));
+        } else {
+            ESP_LOGW(TAG,
+                     "Setup passcode unavailable from provider "
+                     "(factory verifier-only data?)");
+        }
+    }
+
+    char qr_buf[160] = {};
+    chip::MutableCharSpan qr(qr_buf);
+    CHIP_ERROR err = GetQRCode(qr, flags);
+    if (err == CHIP_NO_ERROR) {
+        if (qr.size() < sizeof(qr_buf)) {
+            qr_buf[qr.size()] = '\0';
+        }
+        ESP_LOGI(TAG, "Matter QR: %s", qr_buf);
+        ESP_LOGI(TAG,
+                 "Matter QR URL: https://project-chip.github.io/connectedhomeip/qrcode.html?data=%s",
+                 qr_buf);
+    } else {
+        ESP_LOGW(TAG, "GetQRCode failed: %" CHIP_ERROR_FORMAT, err.Format());
+    }
+
+    char manual_buf[32] = {};
+    chip::MutableCharSpan manual(manual_buf);
+    err = GetManualPairingCode(manual, flags);
+    if (err == CHIP_NO_ERROR) {
+        if (manual.size() < sizeof(manual_buf)) {
+            manual_buf[manual.size()] = '\0';
+        }
+        ESP_LOGI(TAG, "Matter manual code: %s", manual_buf);
+    } else {
+        ESP_LOGW(TAG, "GetManualPairingCode failed: %" CHIP_ERROR_FORMAT,
+                 err.Format());
+    }
+}
 
 /**
  * Ensure a persistent Matter SerialNumber exists.
@@ -706,6 +768,12 @@ extern "C" void app_main()
     /* Starting driver with default values */
     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);
 
+    /*
+     * Log the live onboarding payload before bringing up the LCD so codes are
+     * available even when LVGL buffer allocation fails.
+     */
+    app_log_onboarding_codes();
+
 	/*
 	 * WS2812 temperature indicator (independent of SHT30 presence so On/Off
 	 * still works; color follows sensor readings when available).
@@ -721,7 +789,7 @@ extern "C" void app_main()
 
 	/*
 	 * Shared I2C + 1.28" GC9A01 touch UI. Display failure is non-fatal for
-	 * Matter / IR control, but pairing QR will not be shown.
+	 * Matter / IR control; serial onboarding codes remain the fallback.
 	 */
 	err = board_i2c_init();
 	if (err != ESP_OK) {

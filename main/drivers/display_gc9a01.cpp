@@ -115,20 +115,34 @@ esp_err_t display_init(void)
     const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
-    lvgl_port_display_cfg_t disp_cfg = {};
-    disp_cfg.io_handle = s_io;
-    disp_cfg.panel_handle = s_panel;
-    disp_cfg.buffer_size = BOARD_LCD_H_RES * 40;
-    disp_cfg.double_buffer = true;
-    disp_cfg.hres = BOARD_LCD_H_RES;
-    disp_cfg.vres = BOARD_LCD_V_RES;
-    disp_cfg.monochrome = false;
-    disp_cfg.rotation.swap_xy = false;
-    disp_cfg.rotation.mirror_x = false;
-    disp_cfg.rotation.mirror_y = false;
-    disp_cfg.flags.buff_dma = true;
+    /*
+     * Matter + BLE + Wi-Fi leave little internal DMA RAM. Prefer a single
+     * smaller draw buffer so GC9A01/LVGL can still come up for pairing QR.
+     * Fall back to an even smaller buffer if the first allocation fails.
+     */
+    static const uint16_t k_buf_lines[] = {20, 10};
+    for (uint16_t lines : k_buf_lines) {
+        lvgl_port_display_cfg_t disp_cfg = {};
+        disp_cfg.io_handle = s_io;
+        disp_cfg.panel_handle = s_panel;
+        disp_cfg.buffer_size = BOARD_LCD_H_RES * lines;
+        disp_cfg.double_buffer = false;
+        disp_cfg.hres = BOARD_LCD_H_RES;
+        disp_cfg.vres = BOARD_LCD_V_RES;
+        disp_cfg.monochrome = false;
+        disp_cfg.rotation.swap_xy = false;
+        disp_cfg.rotation.mirror_x = false;
+        disp_cfg.rotation.mirror_y = false;
+        disp_cfg.flags.buff_dma = true;
 
-    s_disp = lvgl_port_add_disp(&disp_cfg);
+        s_disp = lvgl_port_add_disp(&disp_cfg);
+        if (s_disp != nullptr) {
+            ESP_LOGI(TAG, "LVGL display buffer: %u lines, single", lines);
+            break;
+        }
+        ESP_LOGW(TAG, "lvgl_port_add_disp failed with %u-line buffer; retrying",
+                 lines);
+    }
     if (s_disp == nullptr) {
         ESP_LOGE(TAG, "lvgl_port_add_disp failed");
         return ESP_FAIL;
