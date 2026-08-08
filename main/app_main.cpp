@@ -260,8 +260,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionEstablished:
         ESP_LOGI(TAG, "CHIPoBLE connection established");
         /*
-         * Subscribe arrives just before PBKDF/PASE. Drop LVGL immediately so
-         * PacketBuffers / SPAKE2+ have heap. QR was already visible for scan.
+         * Subscribe arrives just before PBKDF/PASE. Replace QR with "配对中..."
+         * then free LVGL heap; the panel keeps that text frame on-screen.
          */
         if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
             app_suspend_display_for_pase();
