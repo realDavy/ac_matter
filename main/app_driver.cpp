@@ -2242,11 +2242,11 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                                       uint32_t attribute_id, esp_matter_attr_val_t *val)
 {
 	int8_t Key = -1;
-// Key Value Range: 0-3,
+// Key Value Range:
 //0 - Temperature +
 //1 - Temperature -
 //2 - Mode
-//3 - Fan Speed
+//3 - Fan Speed (unused; IR fan fixed to Auto)
 //4 - Power
 
 	(void) driver_handle;
