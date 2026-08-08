@@ -16,6 +16,7 @@
 #include <esp_log.h>
 #include <esp_matter.h>
 #include <esp_app_desc.h>
+#include <esp_system.h>
 
 #include <app_priv.h>
 #include <device.h>
@@ -2247,8 +2248,13 @@ void app_driver_ui_set_light_brightness(uint8_t level_1_254)
  * Released:
  *   IR pairing data is erased immediately,
  *   then Matter factory reset is started.
+ *
+ * Do not spawn a dedicated FreeRTOS task here: under Matter + BLE + Wi-Fi the
+ * heap is often too fragmented to allocate another stack (seen as
+ * "Failed to create factory-reset task"). Run on the CHIP work queue, with a
+ * same-context fallback if scheduling fails.
  */
-static void app_driver_factory_reset_task(void *arg)
+static void app_driver_factory_reset_work(intptr_t /*arg*/)
 {
     ESP_LOGI(
         TAG,
@@ -2287,8 +2293,6 @@ static void app_driver_factory_reset_task(void *arg)
     s_factory_reset_task_handle = nullptr;
 
     app_driver_update_led_states();
-
-    vTaskDelete(nullptr);
 }
 
 static void app_driver_button_factory_reset_hold_cb(
@@ -2324,9 +2328,7 @@ static void app_driver_button_factory_reset_release_cb(
         return;
     }
 
-    if (s_factory_reset_task_handle != nullptr ||
-        s_factory_reset_in_progress.exchange(true)) {
-
+    if (s_factory_reset_in_progress.exchange(true)) {
         ESP_LOGW(
             TAG,
             "Factory reset is already running");
@@ -2335,25 +2337,19 @@ static void app_driver_button_factory_reset_release_cb(
 
     ESP_LOGI(
         TAG,
-        "Factory reset release confirmed; starting erase immediately");
+        "Factory reset release confirmed; starting erase immediately "
+        "(free heap=%u)",
+        static_cast<unsigned>(esp_get_free_heap_size()));
 
-    BaseType_t task_result =
-        xTaskCreate(
-            app_driver_factory_reset_task,
-            "factory_reset",
-            4096,
-            nullptr,
-            6,
-            &s_factory_reset_task_handle);
-
-    if (task_result != pdPASS) {
-        ESP_LOGE(
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        app_driver_factory_reset_work, 0);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(
             TAG,
-            "Failed to create factory-reset task");
-
-        s_factory_reset_task_handle = nullptr;
-        s_factory_reset_in_progress.store(false);
-        app_driver_update_led_states();
+            "CHIP ScheduleWork failed (%" CHIP_ERROR_FORMAT "); "
+            "running factory reset on button task",
+            err.Format());
+        app_driver_factory_reset_work(0);
     }
 }
 
