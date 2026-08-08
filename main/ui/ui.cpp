@@ -24,6 +24,7 @@ static const char *TAG = "ui";
 
 enum class ui_screen_t : uint8_t {
     PAIRING = 0,
+    PAIRING_BUSY,
     LEARN,
     AC,
     LIGHT,
@@ -32,6 +33,7 @@ enum class ui_screen_t : uint8_t {
 static std::atomic<bool> s_english{false};
 static std::atomic<bool> s_ready{false};
 static std::atomic<bool> s_stop_task{false};
+static std::atomic<bool> s_pairing_busy{false};
 static TaskHandle_t s_task = nullptr;
 static ui_screen_t s_screen = ui_screen_t::PAIRING;
 
@@ -219,10 +221,33 @@ static void show_pairing(void)
     lv_label_set_text(s_subtitle, s->pairing_hint);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
+    if (s_lang_btn) {
+        lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     char line[64];
     std::snprintf(line, sizeof(line), "%s\n%s", s->manual_code, s_manual_code);
     lv_label_set_text(s_code_label, line);
+}
+
+static void show_pairing_busy(void)
+{
+    /* Use the language selected on the pairing screen (EN / 中文). */
+    const bool english = s_english.load();
+    const ui_strings_t *s = ui_strings(english);
+    hide_all_controls();
+    if (s_lang_btn) {
+        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_label_set_text(s_title, s->pairing_busy_title);
+    lv_label_set_text(s_subtitle, s->pairing_busy_hint);
+    if (s_qr_img) {
+#if LVGL_VERSION_MAJOR >= 9
+        lv_image_set_src(s_qr_img, nullptr);
+#else
+        lv_img_set_src(s_qr_img, nullptr);
+#endif
+    }
 }
 
 static void show_learn(void)
@@ -300,6 +325,9 @@ static void apply_screen(ui_screen_t screen)
     switch (screen) {
     case ui_screen_t::PAIRING:
         show_pairing();
+        break;
+    case ui_screen_t::PAIRING_BUSY:
+        show_pairing_busy();
         break;
     case ui_screen_t::LEARN:
         show_learn();
@@ -479,6 +507,9 @@ static void build_ui(void)
 
 static ui_screen_t decide_screen(void)
 {
+    if (s_pairing_busy.load()) {
+        return ui_screen_t::PAIRING_BUSY;
+    }
     const app_matter_state_t matter = app_get_matter_state_locked();
     if (matter == app_matter_state_t::NOT_COMMISSIONED ||
         matter == app_matter_state_t::COMMISSIONING) {
@@ -566,25 +597,18 @@ esp_err_t ui_show_commissioning_busy(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const ui_strings_t *s = ui_strings(s_english.load());
+    /*
+     * Freeze the language currently selected on the pairing page (via EN/中文)
+     * so the busy frame matches what the user last chose.
+     */
+    s_pairing_busy.store(true);
+    const bool english = s_english.load();
     if (!lvgl_port_lock(200)) {
+        s_pairing_busy.store(false);
         return ESP_ERR_TIMEOUT;
     }
 
-    hide_all_controls();
-    if (s_lang_btn) {
-        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
-    }
-    lv_label_set_text(s_title, s->pairing_busy_title);
-    lv_label_set_text(s_subtitle, s->pairing_busy_hint);
-    /* Drop QR image association so the panel only keeps the text frame. */
-    if (s_qr_img) {
-#if LVGL_VERSION_MAJOR >= 9
-        lv_image_set_src(s_qr_img, nullptr);
-#else
-        lv_img_set_src(s_qr_img, nullptr);
-#endif
-    }
+    apply_screen(ui_screen_t::PAIRING_BUSY);
     std::memset(s_qr_pixels, 0, sizeof(s_qr_pixels));
     std::memset(s_qr_text, 0, sizeof(s_qr_text));
     std::memset(s_manual_code, 0, sizeof(s_manual_code));
@@ -595,7 +619,9 @@ esp_err_t ui_show_commissioning_busy(void)
     lv_refr_now(display_get_disp());
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "Showing commissioning-busy screen");
+    ESP_LOGI(TAG, "Showing commissioning-busy screen (lang=%s, title=%s)",
+             english ? "en" : "zh",
+             ui_strings(english)->pairing_busy_title);
     return ESP_OK;
 }
 
@@ -607,6 +633,7 @@ void ui_deinit(void)
 
     ESP_LOGI(TAG, "Stopping UI task");
     s_stop_task.store(true);
+    s_pairing_busy.store(false);
     s_ready.store(false);
 
     /*
