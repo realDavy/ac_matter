@@ -9,13 +9,18 @@
 #include <esp_heap_caps.h>
 #include <esp_idf_version.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_lcd_gc9a01.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lvgl_port.h>
 #include <esp_log.h>
 
+#include <atomic>
+
 static const char *TAG = "display";
+
+static constexpr uint64_t k_idle_timeout_us = 60ULL * 1000ULL * 1000ULL;
 
 static esp_lcd_panel_io_handle_t s_io = nullptr;
 static esp_lcd_panel_handle_t s_panel = nullptr;
@@ -24,6 +29,55 @@ static bool s_hw_ready = false;
 static bool s_ready = false;
 static bool s_touch_indev_added = false;
 static bool s_backlight_inited = false;
+static std::atomic<bool> s_backlight_on{false};
+static std::atomic<bool> s_idle_hold{false};
+static esp_timer_handle_t s_idle_timer = nullptr;
+
+static void display_idle_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_idle_hold.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (!s_backlight_on.load(std::memory_order_relaxed)) {
+        return;
+    }
+    ESP_LOGI(TAG, "Idle timeout: turning backlight off");
+    display_set_backlight(false);
+}
+
+static void display_idle_timer_ensure(void)
+{
+    if (s_idle_timer != nullptr) {
+        return;
+    }
+    const esp_timer_create_args_t args = {
+        .callback = &display_idle_timer_cb,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "lcd_idle",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &s_idle_timer) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to create LCD idle timer");
+        s_idle_timer = nullptr;
+    }
+}
+
+static void display_idle_timer_restart(void)
+{
+    display_idle_timer_ensure();
+    if (s_idle_timer == nullptr) {
+        return;
+    }
+    (void)esp_timer_stop(s_idle_timer);
+    if (s_idle_hold.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (esp_timer_start_once(s_idle_timer, k_idle_timeout_us) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to start LCD idle timer");
+    }
+}
 
 static void backlight_init(void)
 {
@@ -49,6 +103,8 @@ static void backlight_init(void)
     channel.hpoint = 0;
     ledc_channel_config(&channel);
     s_backlight_inited = true;
+    s_backlight_on.store(false, std::memory_order_relaxed);
+    display_idle_timer_ensure();
 }
 
 void display_set_backlight(bool on)
@@ -59,6 +115,45 @@ void display_set_backlight(bool on)
     const uint32_t duty = on ? 200 : 0;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    s_backlight_on.store(on, std::memory_order_relaxed);
+    if (!on && s_idle_timer != nullptr) {
+        (void)esp_timer_stop(s_idle_timer);
+    }
+}
+
+bool display_is_backlight_on(void)
+{
+    return s_backlight_on.load(std::memory_order_relaxed);
+}
+
+void display_activity_notify(void)
+{
+    if (!s_backlight_inited) {
+        return;
+    }
+    if (!s_backlight_on.load(std::memory_order_relaxed)) {
+        ESP_LOGI(TAG, "Activity: turning backlight on");
+        display_set_backlight(true);
+    }
+    display_idle_timer_restart();
+}
+
+void display_set_idle_hold(bool hold)
+{
+    const bool prev = s_idle_hold.exchange(hold, std::memory_order_relaxed);
+    if (hold) {
+        if (!s_backlight_on.load(std::memory_order_relaxed)) {
+            display_set_backlight(true);
+        }
+        if (s_idle_timer != nullptr) {
+            (void)esp_timer_stop(s_idle_timer);
+        }
+        return;
+    }
+    /* Leaving hold: start the normal 60s idle countdown. */
+    if (prev) {
+        display_activity_notify();
+    }
 }
 
 #if LVGL_VERSION_MAJOR >= 9
@@ -75,6 +170,18 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
+
+    /*
+     * First press while the panel is dark only wakes the backlight — do not
+     * deliver that press as a UI click (avoids accidental button hits).
+     */
+    if (!display_is_backlight_on()) {
+        display_activity_notify();
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+
+    display_activity_notify();
     data->point.x = point.x;
     data->point.y = point.y;
     data->state = LV_INDEV_STATE_PRESSED;
@@ -253,7 +360,7 @@ static esp_err_t display_start_lvgl(void)
         }
     }
 
-    display_set_backlight(true);
+    display_activity_notify();
     s_ready = true;
     ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d)", BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     return ESP_OK;

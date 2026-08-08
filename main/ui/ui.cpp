@@ -35,6 +35,7 @@ static std::atomic<bool> s_english{false};
 static std::atomic<bool> s_ready{false};
 static std::atomic<bool> s_stop_task{false};
 static std::atomic<bool> s_pairing_busy{false};
+static bool s_ui_backlight_hold = false;
 static TaskHandle_t s_task = nullptr;
 static ui_screen_t s_screen = ui_screen_t::PAIRING;
 
@@ -320,6 +321,28 @@ static void show_light(void)
     lv_slider_set_value(s_brightness, ws2812_temp_light_get_brightness(), LV_ANIM_OFF);
 }
 
+static void sync_backlight_hold_for_screen(ui_screen_t screen)
+{
+    const bool want_hold = (screen == ui_screen_t::PAIRING ||
+                            screen == ui_screen_t::PAIRING_BUSY ||
+                            screen == ui_screen_t::LEARN);
+    if (want_hold == s_ui_backlight_hold) {
+        return;
+    }
+    display_set_idle_hold(want_hold);
+    s_ui_backlight_hold = want_hold;
+}
+
+/* Force absolute hold state (used after ui_init / PASE restore). */
+static void apply_backlight_hold_for_screen(ui_screen_t screen)
+{
+    const bool want_hold = (screen == ui_screen_t::PAIRING ||
+                            screen == ui_screen_t::PAIRING_BUSY ||
+                            screen == ui_screen_t::LEARN);
+    display_set_idle_hold(want_hold);
+    s_ui_backlight_hold = want_hold;
+}
+
 static void apply_screen(ui_screen_t screen)
 {
     s_screen = screen;
@@ -341,6 +364,13 @@ static void apply_screen(ui_screen_t screen)
         break;
     }
 
+    /* First paint after init uses absolute hold; later updates are delta-only. */
+    if (!s_ready.load()) {
+        apply_backlight_hold_for_screen(screen);
+    } else {
+        sync_backlight_hold_for_screen(screen);
+    }
+
     const ui_strings_t *s = ui_strings(s_english.load());
     if (s_lang_btn) {
         lv_obj_t *lbl = lv_obj_get_child(s_lang_btn, 0);
@@ -353,6 +383,7 @@ static void apply_screen(ui_screen_t screen)
 static void on_lang(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
     s_english.store(!s_english.load());
     apply_screen(s_screen);
 }
@@ -360,6 +391,7 @@ static void on_lang(lv_event_t *e)
 static void on_learn(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
     app_driver_ir_start_learn();
     ws2812_temp_light_set_learn_active(true);
     apply_screen(ui_screen_t::LEARN);
@@ -368,6 +400,7 @@ static void on_learn(lv_event_t *e)
 static void on_power(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
     app_driver_ui_toggle_power();
     apply_screen(ui_screen_t::AC);
 }
@@ -375,6 +408,7 @@ static void on_power(lv_event_t *e)
 static void on_temp_down(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
     app_driver_ui_adjust_temp(-1);
     apply_screen(ui_screen_t::AC);
 }
@@ -382,18 +416,21 @@ static void on_temp_down(lv_event_t *e)
 static void on_temp_up(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
     app_driver_ui_adjust_temp(1);
     apply_screen(ui_screen_t::AC);
 }
 
 static void on_mode(lv_event_t *e)
 {
+    display_activity_notify();
     const uintptr_t mode = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     ws2812_temp_light_set_mode(static_cast<ws2812_light_mode_t>(mode));
 }
 
 static void on_brightness(lv_event_t *e)
 {
+    display_activity_notify();
     lv_obj_t *slider = static_cast<lv_obj_t *>(lv_event_get_target(e));
     const uint8_t level = static_cast<uint8_t>(lv_slider_get_value(slider));
     ws2812_temp_light_set_brightness(level);
@@ -403,6 +440,7 @@ static void on_brightness(lv_event_t *e)
 static void on_gesture(lv_event_t *e)
 {
     (void)e;
+    display_activity_notify();
 #if LVGL_VERSION_MAJOR >= 9
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
 #else
@@ -580,6 +618,7 @@ esp_err_t ui_init(void)
 
     s_root = nullptr;
     s_screen = ui_screen_t::PAIRING;
+    s_ui_backlight_hold = false;
 
     if (lvgl_port_lock(1000)) {
         build_ui();
@@ -643,6 +682,14 @@ void ui_deinit(void)
     s_stop_task.store(true);
     s_pairing_busy.store(false);
     s_ready.store(false);
+    /*
+     * Keep backlight held across PASE suspend (busy frame stays visible).
+     * Cleared when the next ui_init()/apply_screen() runs after restore.
+     */
+    if (!s_ui_backlight_hold) {
+        display_set_idle_hold(true);
+        s_ui_backlight_hold = true;
+    }
 
     /*
      * Must be safe on the CHIP event loop: do not block. Force-delete the UI

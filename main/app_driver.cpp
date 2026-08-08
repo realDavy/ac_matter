@@ -31,6 +31,7 @@
 #include <freertos/queue.h>
 #include <platform/CHIPDeviceLayer.h>
 #include "board_pins.h"
+#include "display_gc9a01.h"
 #include "ws2812_temp_light.h"
 
 using namespace chip::app::Clusters;
@@ -1498,6 +1499,7 @@ static void app_driver_ir_worker_send_power(const ir_command_t &command)
         return;
     }
 
+    display_activity_notify();
     app_driver_ir_worker_accept_alt_selection();
     app_driver_ir_worker_stop_capture();
     if (!app_driver_ir_worker_wait_idle()) {
@@ -1527,6 +1529,8 @@ static void app_driver_ir_worker_send_state(const ir_command_t &command)
                  s_factory_reset_in_progress.load());
         return;
     }
+
+    display_activity_notify();
 
     app_driver_ir_worker_accept_alt_selection();
     app_driver_ir_worker_stop_capture();
@@ -1676,6 +1680,7 @@ static void app_driver_ir_worker_handle_pairing()
     }
 
     ESP_LOGI(TAG_IR, "IR signal captured for pairing; decoding protocol");
+    display_activity_notify();
 
     const bool ok = s_ac->pair_from_capture();
     s_ir_pairing.store(false);
@@ -1717,6 +1722,9 @@ static void app_driver_ir_worker_parse_signal()
     if (!s_ac) {
         return;
     }
+
+    /* Any captured AC-remote frame is activity — wake before parse result. */
+    display_activity_notify();
 
     ir_ac::AcLogicalState parsed{};
     if (!s_ac->parse_capture(&parsed)) {
@@ -2412,6 +2420,8 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 	if (s_matter_syncing_from_local) {
 	    return ESP_OK;
 	}
+    /* Controller / local UI writes count as user activity — wake the LCD. */
+    display_activity_notify();
     ESP_LOGI(TAG, "attribute_update: endpoint=0x%04x cluster=0x%08lx attribute=0x%08lx",
              endpoint_id,
              (unsigned long) cluster_id,
