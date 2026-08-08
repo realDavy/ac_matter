@@ -63,6 +63,14 @@ constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
 static bool s_display_ui_started = false;
 static bool s_sht30_started = false;
+/* True while a CHIPoBLE link is up (PASE / commissioning). */
+static bool s_chipoble_connected = false;
+/*
+ * After CommissioningComplete, restore LCD/SHT30 once BLE has released heap.
+ * Starting LVGL while CHIPoBLE is still alive often leaves ~20KB free and the
+ * 20-line draw buffer fails.
+ */
+static bool s_pending_post_commission_ui = false;
 
 static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
@@ -71,10 +79,13 @@ static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
                                            void *user_data);
 static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct,
                                         void *user_data);
+static void app_start_display_ui(void);
 static void app_start_pairing_display(void);
 static void app_suspend_display_for_pase(void);
 static void app_start_sht30(void);
 static void app_start_ui_peripherals(void);
+static void app_request_post_commission_ui(void);
+static void app_try_start_pending_post_commission_ui(void);
 
 static void app_schedule_work(chip::DeviceLayer::AsyncWorkFunct work,
                               intptr_t arg = 0)
@@ -270,6 +281,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionEstablished:
         ESP_LOGI(TAG, "CHIPoBLE connection established");
+        s_chipoble_connected = true;
         /*
          * Subscribe arrives just before PBKDF/PASE. Replace QR with "配对中..."
          * then free LVGL heap; the panel keeps that text frame on-screen.
@@ -281,10 +293,14 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionClosed:
         ESP_LOGI(TAG, "CHIPoBLE connection closed");
+        s_chipoble_connected = false;
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
                 !s_commissioning_in_progress) {
                 app_start_pairing_display();
+            } else {
+                /* BLE heap is back; safe to bring up the normal UI. */
+                app_try_start_pending_post_commission_ui();
             }
         });
         break;
@@ -293,8 +309,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Commissioning complete");
 		s_commissioning_in_progress = false;
 		app_driver_update_led_states();
-        /* Restore LCD after PASE suspend; start SHT30 once fabric exists. */
-        app_schedule_work([](intptr_t /*arg*/) { app_start_ui_peripherals(); });
+        /* Restore normal UI (not pairing QR) after BLE releases heap. */
+        app_schedule_work([](intptr_t /*arg*/) { app_request_post_commission_ui(); });
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
@@ -318,10 +334,12 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
         ESP_LOGI(TAG, "Commissioning session stopped");
         s_commissioning_in_progress = false;
-        /* Failed / aborted session: show pairing QR again if still uncommissioned. */
+        /* Failed session → pairing QR; success → resume deferred normal UI. */
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
                 app_start_pairing_display();
+            } else {
+                app_try_start_pending_post_commission_ui();
             }
         });
         break;
@@ -524,16 +542,16 @@ static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct
 }
 
 /*
- * Show Matter QR / manual code on the round LCD before first commission.
- * SHT30 stays deferred — it is not needed for pairing and costs heap/I2C.
+ * Bring up GC9A01 + LVGL + UI. Screen choice is decided inside ui_init()
+ * (pairing QR only when FabricCount == 0; otherwise LEARN/AC).
  */
-static void app_start_pairing_display(void)
+static void app_start_display_ui(void)
 {
     if (s_display_ui_started) {
         return;
     }
 
-    ESP_LOGI(TAG, "Starting pairing display (free heap=%u)",
+    ESP_LOGI(TAG, "Starting display UI (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
 
     esp_err_t err = board_i2c_init();
@@ -555,6 +573,22 @@ static void app_start_pairing_display(void)
     }
 
     s_display_ui_started = true;
+}
+
+/*
+ * Show Matter QR / manual code on the round LCD before first commission.
+ * SHT30 stays deferred — it is not needed for pairing and costs heap/I2C.
+ */
+static void app_start_pairing_display(void)
+{
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+        ESP_LOGW(TAG, "Skip pairing display: fabric already present");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting pairing display (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+    app_start_display_ui();
 }
 
 static void app_suspend_display_for_pase(void)
@@ -602,13 +636,81 @@ static void app_start_sht30(void)
     }
 }
 
-/* Full post-commission bring-up: LCD/UI (again if suspended) + SHT30. */
+/* Full post-commission bring-up: normal LCD/UI (again if suspended) + SHT30. */
 static void app_start_ui_peripherals(void)
 {
     ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
-    app_start_pairing_display();
+    app_start_display_ui();
     app_start_sht30();
+}
+
+static void app_post_commission_ui_fallback(chip::System::Layer * /*layer*/,
+                                            void * /*appState*/)
+{
+    app_schedule_work([](intptr_t /*arg*/) {
+        if (!s_pending_post_commission_ui || s_commissioning_in_progress) {
+            return;
+        }
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+            return;
+        }
+        /*
+         * BLE sometimes stays up after the first fabric (second admin / lingering
+         * CHIPoBLE). Don't block the LEARN/AC UI forever — LVGL will pick a
+         * smaller draw buffer when heap is tight.
+         */
+        ESP_LOGW(TAG,
+                 "Post-commission UI fallback restore (ble=%d heap=%u)",
+                 s_chipoble_connected ? 1 : 0,
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        s_pending_post_commission_ui = false;
+        app_start_ui_peripherals();
+    });
+}
+
+static void app_try_start_pending_post_commission_ui(void)
+{
+    if (!s_pending_post_commission_ui) {
+        return;
+    }
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+        return;
+    }
+    if (s_chipoble_connected || s_commissioning_in_progress) {
+        ESP_LOGI(TAG,
+                 "Post-commission UI still deferred (ble=%d commissioning=%d heap=%u)",
+                 s_chipoble_connected ? 1 : 0,
+                 s_commissioning_in_progress ? 1 : 0,
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        return;
+    }
+
+    s_pending_post_commission_ui = false;
+    (void)chip::DeviceLayer::SystemLayer().CancelTimer(app_post_commission_ui_fallback,
+                                                       nullptr);
+    ESP_LOGI(TAG, "Restoring UI after commissioning (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+    app_start_ui_peripherals();
+}
+
+static void app_request_post_commission_ui(void)
+{
+    s_pending_post_commission_ui = true;
+    if (s_chipoble_connected || s_commissioning_in_progress) {
+        ESP_LOGI(TAG,
+                 "Deferring LCD restore until CHIPoBLE closes (free heap=%u)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        (void)chip::DeviceLayer::SystemLayer().CancelTimer(
+            app_post_commission_ui_fallback, nullptr);
+        (void)chip::DeviceLayer::SystemLayer().StartTimer(
+            chip::System::Clock::Seconds16(20), app_post_commission_ui_fallback,
+            nullptr);
+        return;
+    }
+    (void)chip::DeviceLayer::SystemLayer().CancelTimer(app_post_commission_ui_fallback,
+                                                       nullptr);
+    app_try_start_pending_post_commission_ui();
 }
 
 static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,

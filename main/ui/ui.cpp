@@ -15,6 +15,7 @@
 #include <freertos/task.h>
 
 #include <setup_payload/OnboardingCodesUtil.h>
+#include <app/server/Server.h>
 
 #include <atomic>
 #include <cstdio>
@@ -510,11 +511,18 @@ static ui_screen_t decide_screen(void)
     if (s_pairing_busy.load()) {
         return ui_screen_t::PAIRING_BUSY;
     }
-    const app_matter_state_t matter = app_get_matter_state_locked();
-    if (matter == app_matter_state_t::NOT_COMMISSIONED ||
-        matter == app_matter_state_t::COMMISSIONING) {
+
+    /*
+     * Pairing QR is only for the uncommissioned device. Once a fabric exists,
+     * never return to PAIRING — even while a second fabric is being added
+     * (app_get_matter_state_locked() reports COMMISSIONING in that case).
+     */
+    const size_t fabric_count =
+        chip::Server::GetInstance().GetFabricTable().FabricCount();
+    if (fabric_count == 0) {
         return ui_screen_t::PAIRING;
     }
+
     if (!app_driver_ir_is_paired()) {
         return ui_screen_t::LEARN;
     }

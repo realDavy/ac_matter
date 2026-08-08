@@ -8,6 +8,7 @@
 #include <driver/spi_master.h>
 #include <esp_heap_caps.h>
 #include <esp_idf_version.h>
+#include <esp_system.h>
 #include <esp_lcd_gc9a01.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -164,13 +165,38 @@ static esp_err_t display_start_lvgl(void)
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
     /*
-     * Prefer a single smaller draw buffer. Fall back to fewer lines and to
-     * non-DMA memory if internal DMA RAM is exhausted.
+     * Prefer a single smaller draw buffer. After Matter PASE free heap is often
+     * ~20–30KB with fragmentation, so skip the 20-line attempt unless a large
+     * enough contiguous internal block is available (avoids a failing alloc).
      */
-    static const uint16_t k_buf_lines[] = {20, 10};
+    const size_t largest_dma =
+        heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    const size_t largest_internal =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    constexpr size_t k_bytes_20 =
+        static_cast<size_t>(BOARD_LCD_H_RES) * 20U * sizeof(uint16_t);
+    /* Leave headroom for LVGL port bookkeeping beyond the draw buffer itself. */
+    const bool try_20 =
+        (use_dma && largest_dma >= (k_bytes_20 + 4096)) ||
+        (!use_dma && largest_internal >= (k_bytes_20 + 4096));
+
+    uint16_t line_opts[2];
+    size_t line_opt_count = 0;
+    if (try_20) {
+        line_opts[line_opt_count++] = 20;
+    } else {
+        ESP_LOGI(TAG,
+                 "LVGL: skip 20-line buffer (largest dma=%u internal=%u heap=%u)",
+                 static_cast<unsigned>(largest_dma),
+                 static_cast<unsigned>(largest_internal),
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+    }
+    line_opts[line_opt_count++] = 10;
+
     const bool dma_opts[] = {use_dma, false};
     for (bool dma : dma_opts) {
-        for (uint16_t lines : k_buf_lines) {
+        for (size_t i = 0; i < line_opt_count; ++i) {
+            const uint16_t lines = line_opts[i];
             lvgl_port_display_cfg_t disp_cfg = {};
             disp_cfg.io_handle = s_io;
             disp_cfg.panel_handle = s_panel;
