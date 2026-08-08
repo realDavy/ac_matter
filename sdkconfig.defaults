@@ -35,7 +35,8 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 # Enable OTA Requestor
 CONFIG_ENABLE_OTA_REQUESTOR=y
 
-CONFIG_ENABLE_WIFI_AP=n
+# Matter project config (Manufacturer / VendorName = aidaegis)
+CONFIG_CHIP_PROJECT_CONFIG="main/CHIPProjectConfig.h"
 
 # Enable HKDF in mbedtls
 CONFIG_MBEDTLS_HKDF_C=y
