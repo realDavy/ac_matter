@@ -1370,14 +1370,18 @@ static void app_matter_apply_parsed_ac_state_now(
             fan,
             power_on);
 
+    /*
+     * Setpoint from the IR fan band (always). Off still keeps PercentSetting
+     * at the retained value inside the fan sync helper.
+     */
     const uint8_t fan_percent =
         app_driver_ir_fan_to_percent(
             fan,
-            power_on);
+            true);
 
     /*
      * Parsed/actual AC power state is authoritative:
-     *   AC off -> FanMode Off, 0%
+     *   AC off -> FanMode Off, PercentCurrent 0, PercentSetting retained
      *   AC on  -> current fan mode and normalized percentage
      */
     app_matter_update_fan_endpoint_state_now(
