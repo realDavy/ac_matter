@@ -1,4 +1,4 @@
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 #enable BT
 CONFIG_BT_ENABLED=y
@@ -19,14 +19,14 @@ CONFIG_PARTITION_TABLE_OFFSET=0xC000
 CONFIG_ENABLE_CHIP_SHELL=y
 
 # This example uses 4 dynamic endpoints:
-# Room AC + Fan + Humidity Sensor + WS2812 On/Off Light
+# Room AC + Fan + Humidity Sensor + WS2812 Dimmable Light
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4
 
 #enable lwIP route hooks
 CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
 CONFIG_LWIP_HOOK_ND6_GET_GW_DEFAULT=y
 
-# Button
+# Button (BOOT = GPIO0 on ESP32-S3-WROOM-1)
 CONFIG_BUTTON_PERIOD_TIME_MS=20
 CONFIG_BUTTON_LONG_PRESS_TIME_MS=5000
 
@@ -46,12 +46,14 @@ CONFIG_USE_TEST_SERIAL_NUMBER=""
 CONFIG_MBEDTLS_HKDF_C=y
 
 # Increase LwIP IPv6 address number to 6 (MAX_FABRIC + 1)
-# unique local addresses for fabrics(MAX_FABRIC), a link local address(1)
 CONFIG_LWIP_IPV6_NUM_ADDRESSES=6
 
-# SHT30 defaults for ESP32-C3 (override in menuconfig if needed)
-CONFIG_SHT30_I2C_SDA_PIN=5
-CONFIG_SHT30_I2C_SCL_PIN=6
+# ESP32-S3-WROOM-1-N16 defaults (see main/board_pins.h)
+CONFIG_SHT30_I2C_SDA_PIN=8
+CONFIG_SHT30_I2C_SCL_PIN=9
+CONFIG_WS2812_GPIO=10
 
-# WS2812 ambient-temperature indicator (DIN)
-CONFIG_WS2812_GPIO=7
+# LVGL (via esp_lvgl_port)
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_USE_FONT_PLACEHOLDER=y
+)

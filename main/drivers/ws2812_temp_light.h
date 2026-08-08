@@ -1,40 +1,47 @@
-/*
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
-
 #pragma once
 
 #include <esp_err.h>
 #include <stdbool.h>
+#include <stdint.h>
 
-/**
- * @brief Initialize one WS2812 LED used as an ambient-temperature indicator.
- *
- * Maps room temperature to a green→orange hue and applies a breathing
- * brightness envelope. Power is controlled separately via
- * ws2812_temp_light_set_enabled().
- *
- * @return ESP_OK on success; non-fatal for the rest of the app on failure.
- */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    WS2812_MODE_NIGHT_OFF = 0,
+    WS2812_MODE_MANUAL = 1,
+    WS2812_MODE_TEMP_BREATH = 2, /* default */
+    WS2812_MODE_SOLID = 3,
+    WS2812_MODE_RAINBOW = 4,
+    WS2812_MODE_WHITE_BREATH = 5,
+} ws2812_light_mode_t;
+
 esp_err_t ws2812_temp_light_init(void);
 
-/** Enable or disable the indicator (Matter On/Off). Off clears the LED. */
+/** Matter On/Off. When off, LED is cleared regardless of mode. */
 void ws2812_temp_light_set_enabled(bool enabled);
-
 bool ws2812_temp_light_is_enabled(void);
 
+/** Matter LevelControl CurrentLevel (1..254). */
+void ws2812_temp_light_set_brightness(uint8_t level_1_254);
+uint8_t ws2812_temp_light_get_brightness(void);
+
+/** Screen-only effect mode (not exposed to Matter). */
+void ws2812_temp_light_set_mode(ws2812_light_mode_t mode);
+ws2812_light_mode_t ws2812_temp_light_get_mode(void);
+
 /**
- * @brief Update the color mapping from the latest SHT30 Celsius reading.
- *
- * Comfort scale (clamped):
- *   18 °C → green
- *   24 °C → yellow / amber
- *   30 °C → orange
+ * While IR learn is active, force yellow breathing and ignore other modes
+ * until cleared.
  */
+void ws2812_temp_light_set_learn_active(bool active);
+
 void ws2812_temp_light_set_temperature_c(float temp_c);
 
 bool ws2812_temp_light_is_ready(void);
+
+#ifdef __cplusplus
+}
+#endif
+)

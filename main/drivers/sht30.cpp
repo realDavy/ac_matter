@@ -7,6 +7,8 @@
 */
 
 #include "sht30.h"
+#include "board_i2c.h"
+#include "board_pins.h"
 
 #include <driver/i2c.h>
 #include <esp_log.h>
@@ -15,25 +17,9 @@
 
 static const char *TAG = "sht30";
 
-/*
- * Default I2C pins for ESP32-C3 Super Mini / similar boards.
- * Avoid IR TX (GPIO4), IR RX (GPIO3), status LED (GPIO8), and BOOT (GPIO9).
- * Override via menuconfig symbols when present.
- */
-#if defined(CONFIG_SHT30_I2C_SDA_PIN)
-#define I2C_MASTER_SDA_IO CONFIG_SHT30_I2C_SDA_PIN
-#else
-#define I2C_MASTER_SDA_IO 5
-#endif
-
-#if defined(CONFIG_SHT30_I2C_SCL_PIN)
-#define I2C_MASTER_SCL_IO CONFIG_SHT30_I2C_SCL_PIN
-#else
-#define I2C_MASTER_SCL_IO 6
-#endif
-
-#define I2C_MASTER_NUM I2C_NUM_0
-#define I2C_MASTER_FREQ_HZ 100000
+#define I2C_MASTER_SDA_IO BOARD_I2C_SDA_GPIO
+#define I2C_MASTER_SCL_IO BOARD_I2C_SCL_GPIO
+#define I2C_MASTER_NUM BOARD_I2C_PORT
 
 /* ADDR pin low -> 0x44; ADDR pin high -> 0x45 */
 #if defined(CONFIG_SHT30_I2C_ADDR_VDD)
@@ -84,27 +70,7 @@ static esp_err_t sht30_write_command(const uint8_t cmd[2])
 
 static esp_err_t sht30_init_i2c()
 {
-    i2c_config_t i2c_conf = {};
-    i2c_conf.mode = I2C_MODE_MASTER;
-    i2c_conf.sda_io_num = I2C_MASTER_SDA_IO;
-    i2c_conf.scl_io_num = I2C_MASTER_SCL_IO;
-    i2c_conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-    i2c_conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-    i2c_conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
-
-    esp_err_t err = i2c_param_config(I2C_MASTER_NUM, &i2c_conf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = i2c_driver_install(I2C_MASTER_NUM, I2C_MODE_MASTER, 0, 0, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    return ESP_OK;
+    return board_i2c_init();
 }
 
 static esp_err_t sht30_measure(float *temperature_c, float *humidity_pct)
@@ -206,9 +172,9 @@ esp_err_t sht30_sensor_init(sht30_sensor_config_t *config)
     if (err != ESP_OK) {
         ESP_LOGE(TAG,
                  "SHT30 not responding on I2C (SDA=%d SCL=%d ADDR=0x%02X): %s",
-                 I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, SHT30_SENSOR_ADDR,
+                 static_cast<int>(I2C_MASTER_SDA_IO),
+                 static_cast<int>(I2C_MASTER_SCL_IO), SHT30_SENSOR_ADDR,
                  esp_err_to_name(err));
-        i2c_driver_delete(I2C_MASTER_NUM);
         return err;
     }
     vTaskDelay(pdMS_TO_TICKS(2));
@@ -218,7 +184,6 @@ esp_err_t sht30_sensor_init(sht30_sensor_config_t *config)
     err = sht30_measure(&temp, &humidity);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Initial SHT30 measurement failed: %s", esp_err_to_name(err));
-        i2c_driver_delete(I2C_MASTER_NUM);
         return err;
     }
 
@@ -230,7 +195,6 @@ esp_err_t sht30_sensor_init(sht30_sensor_config_t *config)
     if (created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create SHT30 poll task");
         s_ctx.config = nullptr;
-        i2c_driver_delete(I2C_MASTER_NUM);
         return ESP_ERR_NO_MEM;
     }
 

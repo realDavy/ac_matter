@@ -36,7 +36,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 )
 
 target_compile_options(${COMPONENT_LIB} PUBLIC
-    "-include${CMAKE_CURRENT_LIST_DIR}/ir_protocol_enables.h"
+    "SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/ir_protocol_enables.h"
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

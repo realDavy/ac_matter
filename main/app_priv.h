@@ -106,6 +106,18 @@ bool app_driver_ambient_sensor_active(void);
 /** Apply Matter On/Off for the WS2812 temperature indicator light. */
 esp_err_t app_driver_temp_light_set_power(esp_matter_attr_val_t *val);
 
+/** Apply Matter LevelControl CurrentLevel (1..254) for the ambient light. */
+esp_err_t app_driver_temp_light_set_brightness(esp_matter_attr_val_t *val);
+
+/** IR / UI helpers used by the LVGL screens. */
+bool app_driver_ir_is_paired(void);
+bool app_driver_ir_is_pairing(void);
+void app_driver_ir_start_learn(void);
+void app_driver_ui_toggle_power(void);
+void app_driver_ui_adjust_temp(int delta);
+void app_driver_ui_get_ac_state(int *temp_c, bool *power_on);
+void app_driver_ui_set_light_brightness(uint8_t level_1_254);
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
     {                                                                                   \
