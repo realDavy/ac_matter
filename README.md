@@ -283,8 +283,8 @@ python3 scripts/gen_user_manual_pdf.py
 ### 1. Matter 配网（手机 / 屏上扫码）
 
 1. 手机与设备使用 **2.4 GHz** Wi‑Fi。
-2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**。串口在 `esp_matter::start` 后也会打印 `Matter QR:`、`Matter manual code:`、`Setup passcode`（屏失败时以串口为准）。
-3. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件并扫屏上码 / 打开串口里的 QR URL（或输入串口打印的数字码）。**不要假设**一定是 `20202021` / `34970112332`——以本次启动日志为准。
+2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**，与串口 onboarding 打印一致。
+3. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件并扫屏上码（或输入数字码）。
 4. DIY 固件通常会提示“未认证设备”，按指引继续即可。
 
 配网成功后，控制器中可见的设备身份默认如下：
@@ -395,8 +395,7 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 | 编译缺 `IRremoteESP8266` | `git submodule update --init --recursive` |
 | 目标芯片不对 | 必须 `idf.py set-target esp32s3`（不再支持默认 C3） |
 | 端点创建失败 / 湿度或灯不出现 / 启动 abort 重启 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8` 后重新 `fullclean` + 编译；串口若见 `Failed to create dimmable light endpoint` 即为此项 |
-| 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；串口应出现 `Matter QR:` / `Matter manual code:` / `Setup passcode`（不依赖圆屏）；屏上另有 `UI Matter code:` |
-| PASE 失败日志 `ac` | 配对码与设备真实 PIN 不一致。以串口打印的 `Setup passcode` / `Matter manual code` 为准，勿假设一定是 `20202021`。若刷过 factory/`fctry` 分区，用制造工具给出的码，或 `erase-flash` 后重刷回到测试默认值 |
+| 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；配网页在圆屏，串口会打 `UI Matter code:` / CHIP onboarding QR |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
 | 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |
