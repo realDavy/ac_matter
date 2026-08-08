@@ -9,6 +9,12 @@ extern "C" {
 
 esp_err_t ui_init(void);
 
+/**
+ * Replace the QR / code screen with a light "Pairing..." message and flush it
+ * to the panel before LVGL is suspended for Matter PASE.
+ */
+esp_err_t ui_show_commissioning_busy(void);
+
 /** Stop the UI task so LVGL can be suspended for Matter PASE. */
 void ui_deinit(void);
 

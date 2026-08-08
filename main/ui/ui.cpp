@@ -560,6 +560,45 @@ esp_err_t ui_init(void)
     return ESP_OK;
 }
 
+esp_err_t ui_show_commissioning_busy(void)
+{
+    if (!s_ready.load() || !display_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const ui_strings_t *s = ui_strings(s_english.load());
+    if (!lvgl_port_lock(200)) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    hide_all_controls();
+    if (s_lang_btn) {
+        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_label_set_text(s_title, s->pairing_busy_title);
+    lv_label_set_text(s_subtitle, s->pairing_busy_hint);
+    /* Drop QR image association so the panel only keeps the text frame. */
+    if (s_qr_img) {
+#if LVGL_VERSION_MAJOR >= 9
+        lv_image_set_src(s_qr_img, nullptr);
+#else
+        lv_img_set_src(s_qr_img, nullptr);
+#endif
+    }
+    std::memset(s_qr_pixels, 0, sizeof(s_qr_pixels));
+    std::memset(s_qr_text, 0, sizeof(s_qr_text));
+    std::memset(s_manual_code, 0, sizeof(s_manual_code));
+
+    if (s_root) {
+        lv_obj_invalidate(s_root);
+    }
+    lv_refr_now(display_get_disp());
+    lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "Showing commissioning-busy screen");
+    return ESP_OK;
+}
+
 void ui_deinit(void)
 {
     if (!s_ready.load() && s_task == nullptr) {

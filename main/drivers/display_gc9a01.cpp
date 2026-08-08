@@ -245,15 +245,18 @@ esp_err_t display_init(void)
 void display_suspend_lvgl(void)
 {
     if (!s_ready && s_disp == nullptr) {
-        display_set_backlight(false);
         return;
     }
 
-    ESP_LOGI(TAG, "Suspending LVGL to free heap for Matter PASE (free heap=%u)",
+    ESP_LOGI(TAG,
+             "Suspending LVGL (keep panel frame + backlight) for Matter PASE "
+             "(free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
 
-    display_set_backlight(false);
-
+    /*
+     * Leave the GC9A01 GRAM and backlight alone so the last drawn frame
+     * (e.g. "配对中...") stays visible while BLE PASE reclaims LVGL heap.
+     */
     if (s_disp != nullptr) {
         (void)lvgl_port_remove_disp(s_disp);
         s_disp = nullptr;

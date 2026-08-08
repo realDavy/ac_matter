@@ -559,7 +559,9 @@ static void app_suspend_display_for_pase(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Releasing display heap for Matter PASE");
+    ESP_LOGI(TAG, "Switching to pairing-busy frame, then freeing LVGL heap");
+    /* Draw "配对中..." first; panel keeps that frame after LVGL is suspended. */
+    (void)ui_show_commissioning_busy();
     ui_deinit();
     display_suspend_lvgl();
     s_display_ui_started = false;
