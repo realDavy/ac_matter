@@ -283,8 +283,8 @@ python3 scripts/gen_user_manual_pdf.py
 ### 1. Matter 配网（手机 / 屏上扫码）
 
 1. 手机与设备使用 **2.4 GHz** Wi‑Fi。
-2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**，与串口 onboarding 打印一致。
-3. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件并扫屏上码（或输入数字码）。
+2. 设备未入网时，屏上显示 Matter 二维码与数字配对码；内容由固件当前 `MT:...` **动态生成**。串口在 `esp_matter::start` 后也会打印 `Matter QR:`、`Matter manual code:`、`Setup passcode`（屏失败时以串口为准）。
+3. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件并扫屏上码 / 打开串口里的 QR URL（或输入串口打印的数字码）。**不要假设**一定是 `20202021` / `34970112332`——以本次启动日志为准。
 4. DIY 固件通常会提示“未认证设备”，按指引继续即可。
 
 配网成功后，控制器中可见的设备身份默认如下：
