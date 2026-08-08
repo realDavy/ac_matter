@@ -30,6 +30,9 @@
 
 #include "sht30.h"
 #include "ws2812_temp_light.h"
+#include "board_i2c.h"
+#include "display_gc9a01.h"
+#include "ui.h"
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -649,22 +652,23 @@ extern "C" void app_main()
 	         humidity_sensor_endpoint_id);
 
 	/*
-	 * WS2812 ambient-temperature indicator as a Matter On/Off Light.
-	 * Controllers can turn the breathing indicator on or off; color still
-	 * follows the SHT30 comfort scale (green → orange).
+	 * WS2812 ambient light as Matter Dimmable Light:
+	 * On/Off + LevelControl only. Rainbow / breath / solid modes are
+	 * selected on the local screen (option A).
 	 */
-	on_off_light::config_t temp_light_config;
+	dimmable_light::config_t temp_light_config;
 	temp_light_config.on_off.on_off = true;
-	endpoint_t *temp_light_endpoint = on_off_light::create(
+	temp_light_config.level_control.current_level = 180;
+	endpoint_t *temp_light_endpoint = dimmable_light::create(
 	    node,
 	    &temp_light_config,
 	    ENDPOINT_FLAG_NONE,
 	    nullptr);
 	ABORT_APP_ON_FAILURE(temp_light_endpoint != nullptr,
-	    ESP_LOGE(TAG, "Failed to create temperature indicator light endpoint"));
+	    ESP_LOGE(TAG, "Failed to create dimmable light endpoint"));
 
 	temp_light_endpoint_id = endpoint::get_id(temp_light_endpoint);
-	ESP_LOGI(TAG, "Temperature indicator light created with endpoint_id %d",
+	ESP_LOGI(TAG, "Ambient dimmable light created with endpoint_id %d",
 	         temp_light_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -709,8 +713,29 @@ extern "C" void app_main()
 	err = ws2812_temp_light_init();
 	if (err == ESP_OK) {
 	    ws2812_temp_light_set_enabled(temp_light_config.on_off.on_off);
+	    ws2812_temp_light_set_brightness(
+	        temp_light_config.level_control.current_level);
+	    ws2812_temp_light_set_mode(WS2812_MODE_TEMP_BREATH);
 	} else {
 	    ESP_LOGW(TAG, "WS2812 indicator not available (%s)", esp_err_to_name(err));
+	}
+
+	/*
+	 * Shared I2C + 1.28" GC9A01 touch UI. Display failure is non-fatal for
+	 * Matter / IR control, but pairing QR will not be shown.
+	 */
+	err = board_i2c_init();
+	if (err != ESP_OK) {
+	    ESP_LOGW(TAG, "Board I2C init failed: %s", esp_err_to_name(err));
+	}
+	err = display_init();
+	if (err == ESP_OK) {
+	    err = ui_init();
+	    if (err != ESP_OK) {
+	        ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
+	    }
+	} else {
+	    ESP_LOGW(TAG, "Display init failed: %s", esp_err_to_name(err));
 	}
 
 	/*

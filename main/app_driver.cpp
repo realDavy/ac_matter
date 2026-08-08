@@ -28,6 +28,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <platform/CHIPDeviceLayer.h>
+#include "board_pins.h"
 #include "ws2812_temp_light.h"
 
 using namespace chip::app::Clusters;
@@ -66,13 +67,26 @@ esp_err_t app_driver_temp_light_set_power(esp_matter_attr_val_t *val)
     return ESP_OK;
 }
 
-// ESP32-C3 IR pins (plain 940nm IR LED + TSOP-style receiver).
-// TX drives the IR LED (via transistor recommended). RX is the demodulator OUT.
-static constexpr gpio_num_t IR_TX_PIN = GPIO_NUM_4;
-static constexpr gpio_num_t IR_RX_PIN = GPIO_NUM_3;
+esp_err_t app_driver_temp_light_set_brightness(esp_matter_attr_val_t *val)
+{
+    if (val == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-static constexpr gpio_num_t SUPER_MINI_LED_GPIO = GPIO_NUM_8;
-static constexpr bool SUPER_MINI_LED_ACTIVE_LOW = true;
+    uint8_t level = val->val.u8;
+    if (level < 1) {
+        level = 1;
+    }
+    ws2812_temp_light_set_brightness(level);
+    return ESP_OK;
+}
+
+// ESP32-S3-WROOM-1-N16 defaults (see board_pins.h).
+static constexpr gpio_num_t IR_TX_PIN = BOARD_IR_TX_GPIO;
+static constexpr gpio_num_t IR_RX_PIN = BOARD_IR_RX_GPIO;
+
+static constexpr gpio_num_t SUPER_MINI_LED_GPIO = BOARD_STATUS_LED_GPIO;
+static constexpr bool SUPER_MINI_LED_ACTIVE_LOW = BOARD_STATUS_LED_ACTIVE_LOW;
 
 /*
  * LED controller
@@ -2136,17 +2150,10 @@ static void app_driver_ir_request_alt_next()
     }
 }
 
-static void app_driver_button_single_click_cb(
-    void *arg,
-    void *data)
-{
-    ESP_LOGI(
-        TAG,
-        "Button single clicked: toggle IR AC pairing");
-
-    app_driver_ir_request_pairing_toggle();
-}
-
+/*
+ * BOOT single-click no longer starts IR learn — that is done from the
+ * touchscreen Learn button after Matter commissioning.
+ */
 static void app_driver_button_double_click_cb(void *arg, void *data)
 {
     ESP_LOGI(
@@ -2154,6 +2161,79 @@ static void app_driver_button_double_click_cb(void *arg, void *data)
         "Button double clicked: advance IR Alt protocol traversal");
 
     app_driver_ir_request_alt_next();
+}
+
+bool app_driver_ir_is_paired(void)
+{
+    return s_ir_paired.load();
+}
+
+bool app_driver_ir_is_pairing(void)
+{
+    return s_ir_pairing.load();
+}
+
+void app_driver_ir_start_learn(void)
+{
+    if (s_factory_reset_in_progress.load()) {
+        return;
+    }
+    if (s_ir_pairing.load()) {
+        return;
+    }
+    app_driver_ir_request_pairing_toggle();
+}
+
+void app_driver_ui_get_ac_state(int *temp_c, bool *power_on)
+{
+    if (temp_c) {
+        *temp_c = Temp;
+    }
+    if (power_on) {
+        *power_on = PowerOn;
+    }
+}
+
+void app_driver_ui_toggle_power(void)
+{
+    esp_matter_attr_val_t val = esp_matter_bool(!PowerOn);
+    app_driver_room_air_conditioner_set_power(&val);
+}
+
+void app_driver_ui_adjust_temp(int delta)
+{
+    int next = Temp + delta;
+    if (next < 16) {
+        next = 16;
+    } else if (next > 30) {
+        next = 30;
+    }
+    Temp = next;
+    PowerOn = true;
+
+    const int16_t temp_x100 = static_cast<int16_t>(Temp * 100);
+    app_matter_schedule_report_all_temperatures(temp_x100);
+    app_matter_schedule_whole_device_state(PowerOn, Mode, Fan);
+    app_driver_ir_queue_state(Temp, Mode, Fan, 0, PowerOn);
+}
+
+void app_driver_ui_set_light_brightness(uint8_t level_1_254)
+{
+    if (level_1_254 < 1) {
+        level_1_254 = 1;
+    }
+    ws2812_temp_light_set_brightness(level_1_254);
+
+    chip::DeviceLayer::SystemLayer().ScheduleLambda([level_1_254]() {
+        esp_matter_attr_val_t val = esp_matter_nullable_uint8(level_1_254);
+        s_matter_syncing_from_local = true;
+        attribute::update(
+            temp_light_endpoint_id,
+            LevelControl::Id,
+            LevelControl::Attributes::CurrentLevel::Id,
+            &val);
+        s_matter_syncing_from_local = false;
+    });
 }
 
 
@@ -2541,10 +2621,14 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 Fan);
         }
     }
-    else if (endpoint_id == temp_light_endpoint_id &&
-             cluster_id == OnOff::Id &&
-             attribute_id == OnOff::Attributes::OnOff::Id) {
-        err = app_driver_temp_light_set_power(val);
+    else if (endpoint_id == temp_light_endpoint_id) {
+        if (cluster_id == OnOff::Id &&
+            attribute_id == OnOff::Attributes::OnOff::Id) {
+            err = app_driver_temp_light_set_power(val);
+        } else if (cluster_id == LevelControl::Id &&
+                   attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
+            err = app_driver_temp_light_set_brightness(val);
+        }
     }
 
       
@@ -2796,14 +2880,6 @@ app_driver_handle_t app_driver_button_init()
     }
 
     esp_err_t register_err = ESP_OK;
-
-    register_err |=
-        iot_button_register_cb(
-            handle,
-            BUTTON_SINGLE_CLICK,
-            NULL,
-            app_driver_button_single_click_cb,
-            NULL);
 
     register_err |=
         iot_button_register_cb(

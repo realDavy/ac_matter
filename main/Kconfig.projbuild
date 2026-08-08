@@ -3,18 +3,17 @@ menu "SHT30 Temperature / Humidity Sensor"
     config SHT30_I2C_SDA_PIN
         int "SHT30 I2C SDA GPIO"
         range 0 48
-        default 5
+        default 8
         help
-            GPIO used for SHT30 SDA. Default 5 avoids IR TX/RX and the status LED
-            on ESP32-C3 Super Mini boards.
+            GPIO used for SHT30 SDA (shared with IT7259). Default GPIO8 on
+            ESP32-S3-WROOM-1-N16 board map.
 
     config SHT30_I2C_SCL_PIN
         int "SHT30 I2C SCL GPIO"
         range 0 48
-        default 6
+        default 9
         help
-            GPIO used for SHT30 SCL. Default 6 avoids IR TX/RX and the status LED
-            on ESP32-C3 Super Mini boards.
+            GPIO used for SHT30 SCL (shared with IT7259). Default GPIO9.
 
     config SHT30_I2C_ADDR_VDD
         bool "SHT30 I2C address 0x45 (ADDR tied to VDD)"
@@ -30,10 +29,10 @@ menu "WS2812 Temperature Indicator"
     config WS2812_GPIO
         int "WS2812 DIN GPIO"
         range 0 48
-        default 7
+        default 10
         help
-            Data-in pin for a single WS2812 / NeoPixel used as the ambient
-            temperature breathing indicator. Default GPIO7 avoids IR, SHT30,
-            status LED, and BOOT pins on ESP32-C3 Super Mini boards.
+            Data-in pin for a single WS2812 / NeoPixel ambient light.
+            Default GPIO10 on the ESP32-S3 board map.
 
 endmenu
+)
