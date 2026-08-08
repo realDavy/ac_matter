@@ -30,7 +30,6 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <platform/CHIPDeviceLayer.h>
-#include <app/reporting/reporting.h>
 #include "board_pins.h"
 #include "display_gc9a01.h"
 #include "ws2812_temp_light.h"
@@ -1032,13 +1031,12 @@ static void app_matter_log_update_error(
 /*
  * Update all Fan Control attributes as one logical state.
  *
- * FanControl lives on the RAC endpoint (optional RAC cluster). Publish
- * FanMode together with PercentSetting / PercentCurrent so Apple Home's AC
- * fan slider shows the restored speed on power-on (default Low / 25%).
+ * Publish FanMode with PercentSetting / PercentCurrent so controllers see
+ * the restored speed on power-on (default Low / 25%).
  *
- * Explicit MatterReportingAttributeChangeCallback calls are required for
- * Percent* — FanMode updates alone do not always generate PercentSetting
- * subscription reports (see esp-matter TC-FAN-3.1 / CON discussions).
+ * Use attribute::update only. MatterReportingAttributeChangeCallback must
+ * not be called from set_defaults() on the app task — it asserts the CHIP
+ * stack lock and boot-looped with "Chip stack locking error".
  *
  * The previous synchronization guard is restored so this helper can be used
  * both from a standalone scheduled lambda and from another local update block.
@@ -1053,81 +1051,48 @@ static void app_matter_update_fan_endpoint_state_now(
     s_matter_syncing_from_local = true;
 
     /*
-     * Percent first, then FanMode. Apple Home has shown FanMode=Low (service
-     * On) while the speed slider stayed at 0% after power-on. Force
-     * non-null PercentSetting (same pattern as LocalTemperature) and
-     * MatterReportingAttributeChangeCallback so subscribers refresh the
-     * slider, not only FanMode.
+     * Percent first, then FanMode, so a controller that reacts to FanMode
+     * already sees a non-zero percent.
      */
-    auto set_and_report =
-        [](uint32_t attribute_id,
-           esp_matter_attr_val_t *val,
-           const char *name) {
-            attribute_t *attr = attribute::get(
-                fan_endpoint_id,
-                FanControl::Id,
-                attribute_id);
-            if (attr == nullptr) {
-                ESP_LOGE(TAG, "Missing FanControl %s", name);
-                return;
-            }
-            esp_err_t err = attribute::set_val(attr, val);
-            if (err != ESP_OK) {
-                err = attribute::update(
-                    fan_endpoint_id,
-                    FanControl::Id,
-                    attribute_id,
-                    val);
-            }
-            app_matter_log_update_error(name, err);
-            MatterReportingAttributeChangeCallback(
-                fan_endpoint_id,
-                FanControl::Id,
-                attribute_id);
-        };
-
     esp_matter_attr_val_t percent_current =
         esp_matter_uint8(fan_percent);
-    set_and_report(
-        FanControl::Attributes::PercentCurrent::Id,
-        &percent_current,
-        "PercentCurrent");
 
-    attribute_t *percent_setting_attr = attribute::get(
-        fan_endpoint_id,
-        FanControl::Id,
-        FanControl::Attributes::PercentSetting::Id);
-    if (percent_setting_attr != nullptr) {
-        esp_matter_attr_val_t percent_setting =
-            esp_matter_invalid(nullptr);
-        attribute::get_val(
-            percent_setting_attr,
-            &percent_setting);
-        percent_setting.type =
-            ESP_MATTER_VAL_TYPE_NULLABLE_UINT8;
-        percent_setting.val.u8 = fan_percent;
-        set_and_report(
+    app_matter_log_update_error(
+        "PercentCurrent",
+        attribute::update(
+            fan_endpoint_id,
+            FanControl::Id,
+            FanControl::Attributes::PercentCurrent::Id,
+            &percent_current));
+
+    esp_matter_attr_val_t percent_setting =
+        esp_matter_nullable_uint8(fan_percent);
+
+    app_matter_log_update_error(
+        "PercentSetting",
+        attribute::update(
+            fan_endpoint_id,
+            FanControl::Id,
             FanControl::Attributes::PercentSetting::Id,
-            &percent_setting,
-            "PercentSetting");
-    } else {
-        ESP_LOGE(TAG, "Missing FanControl PercentSetting");
-    }
+            &percent_setting));
 
     esp_matter_attr_val_t fan_mode_val =
         esp_matter_enum8(matter_fan_mode);
-    set_and_report(
-        FanControl::Attributes::FanMode::Id,
-        &fan_mode_val,
-        "FanMode");
+
+    app_matter_log_update_error(
+        "FanMode",
+        attribute::update(
+            fan_endpoint_id,
+            FanControl::Id,
+            FanControl::Attributes::FanMode::Id,
+            &fan_mode_val));
 
     s_matter_syncing_from_local =
         previous_sync_state;
 
     ESP_LOGI(
         TAG,
-        "Fan Control synchronized (ep=%u): FanMode=%u Percent=%u",
-        static_cast<unsigned>(fan_endpoint_id),
+        "Fan endpoint synchronized: FanMode=%u Percent=%u",
         static_cast<unsigned>(matter_fan_mode),
         static_cast<unsigned>(fan_percent));
 }
