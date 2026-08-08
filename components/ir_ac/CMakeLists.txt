@@ -26,10 +26,17 @@ idf_component_register(
 
 # Build IRremoteESP8266 in host/unit-test mode so encode/decode work without
 # Arduino GPIO interrupts. SWIGLIB redirects mark/space into timingList for RMT.
+#
+# Only enable protocols we actually compile (see ir_protocol_enables.h +
+# ir_sources.list). Leaving _IR_ENABLE_DEFAULT_=true pulls in TV/AV protocols
+# whose .cpp files are not in the build and causes link failures.
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     UNIT_TEST
     SWIGLIB
-    _IR_ENABLE_DEFAULT_=true
+)
+
+target_compile_options(${COMPONENT_LIB} PUBLIC
+    "-include${CMAKE_CURRENT_LIST_DIR}/ir_protocol_enables.h"
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

@@ -4,6 +4,7 @@ IRsend.cpp
 IRtext.cpp
 IRtimer.cpp
 IRutils.cpp
+ir_NEC.cpp
 ir_Airton.cpp
 ir_Airwell.cpp
 ir_Amcor.cpp
