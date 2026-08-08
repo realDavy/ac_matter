@@ -856,12 +856,6 @@ extern "C" void app_main()
 	 * of being attached to the Room Air Conditioner endpoint.
 	 */
 	fan::config_t fan_config = {};
-
-	/*
-	 * Fan OnOff is the master switch for Apple Home's fan slider. Start Off;
-	 * app_driver restores On + Low/25% when the AC powers on.
-	 */
-	fan_config.on_off.on_off = false;
 	
 	/*
 	 * Matter FanMode:
