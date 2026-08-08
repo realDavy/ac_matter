@@ -7,13 +7,19 @@
 */
 
 #include <esp_err.h>
+#include <esp_event.h>
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_random.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 #include <nvs_flash.h>
 #include <cstdio>
 #include <cstring>
+
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
+#include <esp_coexist.h>
+#endif
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
@@ -583,6 +589,40 @@ static void app_start_ui_peripherals(void)
     }
 }
 
+static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
+                                   int32_t event_id, void *event_data)
+{
+    (void)arg;
+    if (event_base != WIFI_EVENT) {
+        return;
+    }
+
+    if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        const auto *ev =
+            static_cast<const wifi_event_sta_disconnected_t *>(event_data);
+        ESP_LOGW(TAG,
+                 "WIFI_EVENT_STA_DISCONNECTED reason=%u ssid=%.*s rssi=%d",
+                 static_cast<unsigned>(ev->reason),
+                 ev->ssid_len, reinterpret_cast<const char *>(ev->ssid),
+                 static_cast<int>(ev->rssi));
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
+        /* Prefer Wi-Fi while Matter still holds CHIPoBLE open for ConnectNetwork. */
+        esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+#endif
+    } else if (event_id == WIFI_EVENT_STA_START) {
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
+        esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+#endif
+    } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+        const auto *ev =
+            static_cast<const wifi_event_sta_connected_t *>(event_data);
+        ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED ssid=%.*s channel=%u auth=%u",
+                 ev->ssid_len, reinterpret_cast<const char *>(ev->ssid),
+                 static_cast<unsigned>(ev->channel),
+                 static_cast<unsigned>(ev->authmode));
+    }
+}
+
 extern "C" void app_main()
 {
     esp_err_t err = ESP_OK;
@@ -592,6 +632,14 @@ extern "C" void app_main()
 
     /* Persist SerialNumber before Matter reads Basic Information */
     app_ensure_serial_number();
+
+    /*
+     * Log Wi-Fi disconnect reasons during Matter ConnectNetwork. BLE+WiFi
+     * coexistence often fails here; reason codes distinguish auth/password
+     * problems from RF coexist timeouts.
+     */
+    ESP_ERROR_CHECK(esp_event_handler_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &app_wifi_event_handler, nullptr));
 
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
