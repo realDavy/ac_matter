@@ -1035,12 +1035,22 @@ static void app_matter_log_update_error(
 }
 
 /*
+ * Last non-zero fan percent setpoint retained across Off.
+ *
+ * Apple Home's composed AC fan slider often does not refresh when the device
+ * later reports a new PercentSetting. If Off also writes PercentSetting=0,
+ * Home caches 0% and the slider stays empty after power-on even though we
+ * report 25%. Keep the setpoint across Off; only PercentCurrent goes to 0.
+ */
+static uint8_t s_retained_fan_percent = 25;
+
+/*
  * Update all Fan endpoint attributes as one logical state.
  *
  * Apple Home treats Fan OnOff as the master switch for the vertical percent
- * slider: while OnOff is Off, PercentCurrent is shown as 0% even if
- * FanMode / PercentSetting were updated. Keep OnOff aligned with FanMode so
- * power-on restores a visible non-zero speed (default Low / 25%).
+ * slider. Keep OnOff aligned with FanMode. PercentSetting / SpeedSetting hold
+ * the retained setpoint even while Off; PercentCurrent / SpeedCurrent are 0
+ * when Off.
  *
  * Use attribute::update only. MatterReportingAttributeChangeCallback must
  * not be called from set_defaults() on the app task — it asserts the CHIP
@@ -1062,6 +1072,12 @@ static void app_matter_update_fan_endpoint_state_now(
         matter_fan_mode !=
         static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
 
+    if (fan_percent > 0) {
+        s_retained_fan_percent = fan_percent;
+    } else if (!fan_on) {
+        fan_percent = s_retained_fan_percent;
+    }
+
     esp_matter_attr_val_t on_off_val =
         esp_matter_bool(fan_on);
 
@@ -1073,12 +1089,24 @@ static void app_matter_update_fan_endpoint_state_now(
             OnOff::Attributes::OnOff::Id,
             &on_off_val));
 
-    /*
-     * Percent first, then FanMode, so a controller that reacts to FanMode
-     * already sees a non-zero percent. Force 0% when Off.
-     */
+    const uint8_t percent_setting_value = fan_percent;
     const uint8_t percent_current_value =
-        fan_on ? fan_percent : static_cast<uint8_t>(0);
+        fan_on ? percent_setting_value : static_cast<uint8_t>(0);
+
+    /*
+     * Setting first (non-zero even when Off), then current, then FanMode —
+     * so a controller that snapshots PercentSetting at Off still has 25%.
+     */
+    esp_matter_attr_val_t percent_setting =
+        esp_matter_nullable_uint8(percent_setting_value);
+
+    app_matter_log_update_error(
+        "PercentSetting",
+        attribute::update(
+            fan_endpoint_id,
+            FanControl::Id,
+            FanControl::Attributes::PercentSetting::Id,
+            &percent_setting));
 
     esp_matter_attr_val_t percent_current =
         esp_matter_uint8(percent_current_value);
@@ -1091,16 +1119,27 @@ static void app_matter_update_fan_endpoint_state_now(
             FanControl::Attributes::PercentCurrent::Id,
             &percent_current));
 
-    esp_matter_attr_val_t percent_setting =
-        esp_matter_nullable_uint8(percent_current_value);
+    esp_matter_attr_val_t speed_setting =
+        esp_matter_nullable_uint8(percent_setting_value);
 
     app_matter_log_update_error(
-        "PercentSetting",
+        "SpeedSetting",
         attribute::update(
             fan_endpoint_id,
             FanControl::Id,
-            FanControl::Attributes::PercentSetting::Id,
-            &percent_setting));
+            FanControl::Attributes::SpeedSetting::Id,
+            &speed_setting));
+
+    esp_matter_attr_val_t speed_current =
+        esp_matter_uint8(percent_current_value);
+
+    app_matter_log_update_error(
+        "SpeedCurrent",
+        attribute::update(
+            fan_endpoint_id,
+            FanControl::Id,
+            FanControl::Attributes::SpeedCurrent::Id,
+            &speed_current));
 
     esp_matter_attr_val_t fan_mode_val =
         esp_matter_enum8(matter_fan_mode);
@@ -1118,9 +1157,11 @@ static void app_matter_update_fan_endpoint_state_now(
 
     ESP_LOGI(
         TAG,
-        "Fan endpoint synchronized: OnOff=%s FanMode=%u Percent=%u",
+        "Fan endpoint synchronized: OnOff=%s FanMode=%u "
+        "Setting=%u%% Current=%u%%",
         fan_on ? "On" : "Off",
         static_cast<unsigned>(matter_fan_mode),
+        static_cast<unsigned>(percent_setting_value),
         static_cast<unsigned>(percent_current_value));
 }
 
@@ -1176,10 +1217,16 @@ static void app_matter_update_whole_device_state_now(
             fan,
             power_on);
 
+    /*
+     * Always compute the retained setpoint from the IR fan band (or the
+     * controller override). When powering Off, still pass that setpoint so
+     * PercentSetting stays non-zero for Apple Home's cached slider value;
+     * PercentCurrent is cleared inside the fan sync helper.
+     */
     uint8_t fan_percent =
         app_driver_ir_fan_to_percent(
             fan,
-            power_on);
+            true);
 
     /*
      * Controllers (especially Apple Home) drag PercentSetting continuously.
@@ -1191,6 +1238,8 @@ static void app_matter_update_whole_device_state_now(
             percent_override = 100;
         }
         fan_percent = static_cast<uint8_t>(percent_override);
+    } else if (!power_on && s_retained_fan_percent > 0) {
+        fan_percent = s_retained_fan_percent;
     }
 
     app_matter_update_fan_endpoint_state_now(
@@ -2715,7 +2764,9 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
             }
         }
         else if (attribute_id ==
-                 FanControl::Attributes::PercentSetting::Id) {
+                     FanControl::Attributes::PercentSetting::Id ||
+                 attribute_id ==
+                     FanControl::Attributes::SpeedSetting::Id) {
 
             const uint8_t requested_percent =
                 val->val.u8;
@@ -2726,9 +2777,19 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 
                 ESP_LOGI(
                     TAG,
-                    "Fan PercentSetting 0%% received: "
-                    "turning whole device Off");
+                    "Fan %s 0%% received: turning whole device Off "
+                    "(retain Setting=%u%%)",
+                    attribute_id ==
+                            FanControl::Attributes::SpeedSetting::Id
+                        ? "SpeedSetting"
+                        : "PercentSetting",
+                    static_cast<unsigned>(s_retained_fan_percent));
 
+                /*
+                 * Off clears PercentCurrent / FanMode / OnOff, but keeps the
+                 * previous non-zero PercentSetting so Home's slider cache
+                 * does not stick at 0% for the next power-on.
+                 */
                 app_matter_schedule_whole_device_state(
                     PowerOn,
                     Mode,
@@ -2824,7 +2885,7 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      *   Thermostat SystemMode = Off
      *   Fan OnOff             = Off
      *   FanMode               = Off
-     *   PercentSetting        = 0%
+     *   PercentSetting        = 25% (retained Low default; not 0%)
      *   PercentCurrent        = 0%
      *
      * Keep the last/default IR fan level at Low for the next power-on
@@ -2893,12 +2954,13 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
             &system_mode_val));
 
     /*
-     * Publish the complete fan endpoint Off state (OnOff + FanControl).
-     * Internal Fan remains Low so the next power-on restores Low / 25%.
+     * Publish Fan Off with retained PercentSetting 25% (not 0%). Home's
+     * initial subscription then already has a non-zero slider setpoint.
      */
+    s_retained_fan_percent = 25;
     app_matter_update_fan_endpoint_state_now(
         static_cast<uint8_t>(FanControl::FanModeEnum::kOff),
-        0);
+        25);
 
     s_matter_syncing_from_local = false;
 

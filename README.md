@@ -26,7 +26,7 @@
 Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`；Root 也占槽位，设为 4 会在创建灯光端点时 abort 重启）：
 
 1. **Room Air Conditioner** — 开关 / 温控（Thermostat）  
-2. **Fan** — FanControl 风速（Off/High/Auto + 百分比）+ OnOff（与整机电源同步；供 Apple Home 空调页竖条）  
+2. **Fan** — FanControl 风速（Off/High/Auto + Percent/MultiSpeed）+ OnOff；挂在 Room AC 下（PartsList）；关机保留 PercentSetting（避免 Home 竖条卡在 0%）  
 3. **Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
 4. **Dimmable Light** — WS2812 氛围灯（开关 + 亮度）
 
