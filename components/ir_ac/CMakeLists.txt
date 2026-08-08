@@ -1,4 +1,5 @@
 set(IRREMOTE_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../../deps/IRremoteESP8266/src")
+set(IRREMOTE_TEST_DIR "${CMAKE_CURRENT_LIST_DIR}/../../deps/IRremoteESP8266/test")
 
 set(IRREMOTE_SRCS "")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/ir_sources.list" IRREMOTE_SRC_NAMES)
@@ -15,6 +16,8 @@ idf_component_register(
         "include"
         "arduino_compat"
         "${IRREMOTE_SRC_DIR}"
+        # UNIT_TEST builds need IRsend_test.h (and friends) from the library test/
+        "${IRREMOTE_TEST_DIR}"
     REQUIRES
         driver
         esp_timer
