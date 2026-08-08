@@ -157,4 +157,3 @@ bool display_is_ready(void)
 {
     return s_ready;
 }
-)

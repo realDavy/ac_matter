@@ -44,4 +44,3 @@ bool ws2812_temp_light_is_ready(void);
 #ifdef __cplusplus
 }
 #endif
-)

@@ -296,4 +296,3 @@ bool ws2812_temp_light_is_ready(void)
 {
     return s_ready.load();
 }
-)

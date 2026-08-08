@@ -12,4 +12,3 @@ esp_err_t board_i2c_init(void);
 bool board_i2c_is_ready(void);
 
 i2c_port_t board_i2c_port(void);
-)

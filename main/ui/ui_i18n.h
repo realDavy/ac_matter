@@ -81,4 +81,3 @@ static inline const ui_strings_t *ui_strings(bool english)
 
     return english ? &en : &zh;
 }
-)

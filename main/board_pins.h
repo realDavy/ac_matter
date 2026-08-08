@@ -46,4 +46,3 @@
 #define BOARD_LCD_H_RES           240
 #define BOARD_LCD_V_RES           240
 #define BOARD_LCD_SPI_PIXEL_CLOCK_HZ (40 * 1000 * 1000)
-)

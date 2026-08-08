@@ -54,4 +54,3 @@ i2c_port_t board_i2c_port(void)
 {
     return BOARD_I2C_PORT;
 }
-)

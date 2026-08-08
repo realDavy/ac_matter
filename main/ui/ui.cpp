@@ -560,4 +560,3 @@ bool ui_is_language_english(void)
 {
     return s_english.load();
 }
-)

@@ -35,4 +35,3 @@ menu "WS2812 Temperature Indicator"
             Default GPIO10 on the ESP32-S3 board map.
 
 endmenu
-)

@@ -19,4 +19,3 @@ bool ui_is_language_english(void);
 #ifdef __cplusplus
 }
 #endif
-)

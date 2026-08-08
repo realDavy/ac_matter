@@ -12,4 +12,3 @@ extern const lv_font_t ui_font_cn_20;
 #ifdef __cplusplus
 }
 #endif
-)

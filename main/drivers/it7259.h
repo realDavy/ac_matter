@@ -16,4 +16,3 @@ esp_err_t it7259_init(void);
 esp_err_t it7259_read(it7259_point_t *point);
 
 bool it7259_is_ready(void);
-)

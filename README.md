@@ -348,4 +348,3 @@ idf.py -p <串口> monitor
 - 本仓库工程代码：见根目录 [`LICENSE`](LICENSE)（MIT）。
 - [IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266)：LGPL-2.1，请遵守其条款。
 - `espressif/led_strip`、`esp_lcd_gc9a01`、`esp_lvgl_port`、`lvgl` 等组件：遵循各自 SPDX / 组件许可证。
-)
