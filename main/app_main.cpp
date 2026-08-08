@@ -10,6 +10,7 @@
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <nvs_flash.h>
 #include <cstdio>
 #include <cstring>
@@ -56,9 +57,16 @@ using namespace chip::app::Clusters;
 
 constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
+static bool s_ui_peripherals_started = false;
 
 static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
+
+static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
+                                           void *user_data);
+static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct,
+                                        void *user_data);
+static void app_start_ui_peripherals(void);
 
 /**
  * Always dump the live Matter onboarding payload to the serial console.
@@ -305,6 +313,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Commissioning complete");
 		s_commissioning_in_progress = false;
 		app_driver_update_led_states();
+        /* LCD/SHT30 were deferred so PASE had enough heap. */
+        chip::DeviceLayer::PlatformMgr().ScheduleWork(
+            [](intptr_t /*arg*/) { app_start_ui_peripherals(); }, 0);
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
@@ -516,6 +527,60 @@ static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct
             RelativeHumidityMeasurement::Attributes::MeasuredValue::Id,
             &val);
     });
+}
+
+/*
+ * LCD + touch UI + SHT30 are heavy. During first-time commissioning, Matter
+ * PASE/BLE already starves the heap (PacketBuffer EMPTY / false PASE ac).
+ * Start these only after a fabric exists, or right after commissioning.
+ */
+static void app_start_ui_peripherals(void)
+{
+    if (s_ui_peripherals_started) {
+        return;
+    }
+    s_ui_peripherals_started = true;
+
+    ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+
+    esp_err_t err = board_i2c_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Board I2C init failed: %s", esp_err_to_name(err));
+    }
+
+    err = display_init();
+    if (err == ESP_OK) {
+        err = ui_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
+        }
+    } else {
+        ESP_LOGW(TAG, "Display init failed: %s", esp_err_to_name(err));
+    }
+
+    static sht30_sensor_config_t sht30_config = {
+        .temperature = {
+            .cb = sht30_temperature_notification,
+            .endpoint_id = room_air_conditioner_endpoint_id,
+        },
+        .humidity = {
+            .cb = sht30_humidity_notification,
+            .endpoint_id = humidity_sensor_endpoint_id,
+        },
+        .user_data = nullptr,
+        .interval_ms = 5000,
+    };
+    err = sht30_sensor_init(&sht30_config);
+    if (err == ESP_OK) {
+        app_driver_set_ambient_sensor_active(true);
+        ESP_LOGI(TAG, "SHT30 ambient sensor active");
+    } else {
+        app_driver_set_ambient_sensor_active(false);
+        ESP_LOGW(TAG,
+                 "SHT30 not available (%s); LocalTemperature will mirror setpoints",
+                 esp_err_to_name(err));
+    }
 }
 
 extern "C" void app_main()
@@ -788,49 +853,16 @@ extern "C" void app_main()
 	}
 
 	/*
-	 * Shared I2C + 1.28" GC9A01 touch UI. Display failure is non-fatal for
-	 * Matter / IR control; serial onboarding codes remain the fallback.
+	 * Keep LCD/SHT30 off until a fabric exists so BLE PASE has enough heap.
+	 * Pairing codes are already printed above for serial / phone use.
 	 */
-	err = board_i2c_init();
-	if (err != ESP_OK) {
-	    ESP_LOGW(TAG, "Board I2C init failed: %s", esp_err_to_name(err));
-	}
-	err = display_init();
-	if (err == ESP_OK) {
-	    err = ui_init();
-	    if (err != ESP_OK) {
-	        ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
-	    }
+	if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+	    app_start_ui_peripherals();
 	} else {
-	    ESP_LOGW(TAG, "Display init failed: %s", esp_err_to_name(err));
-	}
-
-	/*
-	 * Initialize SHT30 after Matter is running so attribute updates can be
-	 * scheduled safely. Sensor absence is non-fatal: IR / Matter AC control
-	 * continues, and LocalTemperature falls back to setpoint mirroring.
-	 */
-	static sht30_sensor_config_t sht30_config = {
-	    .temperature = {
-	        .cb = sht30_temperature_notification,
-	        .endpoint_id = room_air_conditioner_endpoint_id,
-	    },
-	    .humidity = {
-	        .cb = sht30_humidity_notification,
-	        .endpoint_id = humidity_sensor_endpoint_id,
-	    },
-	    .user_data = nullptr,
-	    .interval_ms = 5000,
-	};
-	err = sht30_sensor_init(&sht30_config);
-	if (err == ESP_OK) {
-	    app_driver_set_ambient_sensor_active(true);
-	    ESP_LOGI(TAG, "SHT30 ambient sensor active");
-	} else {
-	    app_driver_set_ambient_sensor_active(false);
 	    ESP_LOGW(TAG,
-	             "SHT30 not available (%s); LocalTemperature will mirror setpoints",
-	             esp_err_to_name(err));
+	             "Deferring LCD/SHT30 until commissioning completes "
+	             "(free heap=%u)",
+	             static_cast<unsigned>(esp_get_free_heap_size()));
 	}
 
 #if CONFIG_ENABLE_CHIP_SHELL

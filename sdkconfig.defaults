@@ -15,8 +15,8 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0xC000
 
-# Enable chip shell
-CONFIG_ENABLE_CHIP_SHELL=y
+# Chip shell costs RAM during BLE PASE; enable locally if needed for debug
+CONFIG_ENABLE_CHIP_SHELL=n
 
 # Dynamic endpoints: Root + Room AC + Fan + Humidity + WS2812 Dimmable Light.
 # Must be > app endpoints alone — root/node also consumes a slot; 4 is too low
@@ -33,6 +33,12 @@ CONFIG_BUTTON_LONG_PRESS_TIME_MS=5000
 
 # disable softap by default
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# Trim Wi-Fi buffers — Matter + BLE PASE is heap-starved on S3 without PSRAM
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_RX_BA_WIN=4
 
 # Enable OTA Requestor
 CONFIG_ENABLE_OTA_REQUESTOR=y

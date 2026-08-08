@@ -1783,7 +1783,7 @@ static esp_err_t app_driver_ir_start_worker()
     BaseType_t result = xTaskCreate(
         app_driver_ir_worker_task,
         "ir_worker",
-        8192,
+        6144,
         nullptr,
         5,
         &s_ir_worker_task_handle);

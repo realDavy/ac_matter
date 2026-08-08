@@ -6,6 +6,7 @@
 #include <driver/gpio.h>
 #include <driver/ledc.h>
 #include <driver/spi_master.h>
+#include <esp_heap_caps.h>
 #include <esp_idf_version.h>
 #include <esp_lcd_gc9a01.h>
 #include <esp_lcd_panel_io.h>
@@ -145,6 +146,8 @@ esp_err_t display_init(void)
     }
     if (s_disp == nullptr) {
         ESP_LOGE(TAG, "lvgl_port_add_disp failed");
+        /* Drop the LVGL task started by lvgl_port_init(); otherwise it keeps RAM. */
+        (void)lvgl_port_deinit();
         return ESP_FAIL;
     }
 
