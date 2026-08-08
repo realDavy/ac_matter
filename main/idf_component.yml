@@ -6,7 +6,8 @@ dependencies:
       - if: "target in [esp32c2]"
   espressif/led_strip: "^3.0.0"
   espressif/esp_lcd_gc9a01: "^2.0.0"
-  espressif/esp_lvgl_port: "~1.4.4"
+  # Port 2.x supports LVGL8/9; pin LVGL 8 so generated fonts match.
+  espressif/esp_lvgl_port: "^2.4.4"
   lvgl/lvgl:
-    version: "~8.3.11"
+    version: "^8.3.0"
     public: true
