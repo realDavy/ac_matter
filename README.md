@@ -147,8 +147,8 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 本仓库通过 submodule 引用 IRremoteESP8266，请递归克隆：
 
 ```bash
-git clone --recursive https://github.com/realDavy/bc7215_ac_matter.git
-cd bc7215_ac_matter
+git clone --recursive https://github.com/realDavy/ac_matter.git
+cd ac_matter
 ```
 
 若已克隆但未拉子模块：
@@ -161,7 +161,7 @@ git submodule update --init --recursive
 
 ```bash
 idf.py set-target esp32s3
-idf.py menuconfig    # 确认 MAX_DYNAMIC_ENDPOINT_COUNT=4；可改 SHT30/WS2812 引脚
+idf.py menuconfig    # 确认 MAX_DYNAMIC_ENDPOINT_COUNT≥8；可改 SHT30/WS2812 引脚
 idf.py build
 idf.py -p <串口> erase-flash flash monitor
 ```
