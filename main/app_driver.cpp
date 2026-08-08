@@ -2290,7 +2290,6 @@ static void app_driver_factory_reset_work(intptr_t /*arg*/)
      * The IR worker remains alive in STOPPED state after CLEAR_PAIRING.
      */
     s_factory_reset_in_progress.store(false);
-    s_factory_reset_task_handle = nullptr;
 
     app_driver_update_led_states();
 }
