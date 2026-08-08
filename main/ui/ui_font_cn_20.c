@@ -1,14 +1,10 @@
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 4
- * Opts: --font /usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf -r 0x20-0x7F --symbols 空调关闭降温升温灯光模式学习配网扫码亮度彩虹呼吸温感手动夜间开关风扇湿度温度确认取消左右滑动请对准遥控任意键白色纯色氛围英中文°%./:-MT0123456789 --size 20 --bpp 4 --format lvgl --lv-font-name ui_font_cn_20 --no-compress -o /workspace/main/ui/ui_font_cn_20.c
+ * Opts: --font /usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf -r 0x20-0x7F --symbols 空调关闭降温升温灯光模式学习配网扫码亮度彩虹呼吸温感手动夜间开关风扇湿度温度确认取消左右滑动请对准遥控任意键白色纯色氛围英中文°%./:-MT0123456789 --size 20 --bpp 4 --format lvgl --lv-font-name ui_font_cn_20 --lv-include lvgl.h --no-compress -o main/ui/ui_font_cn_20.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef UI_FONT_CN_20
 #define UI_FONT_CN_20 1

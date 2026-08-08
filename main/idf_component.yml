@@ -6,8 +6,7 @@ dependencies:
       - if: "target in [esp32c2]"
   espressif/led_strip: "^3.0.0"
   espressif/esp_lcd_gc9a01: "^2.0.0"
-  espressif/esp_lvgl_port: "^2.4.4"
+  espressif/esp_lvgl_port: "~1.4.4"
   lvgl/lvgl:
-    version: "^9.2.0"
+    version: "~8.3.11"
     public: true
-

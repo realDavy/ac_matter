@@ -6,18 +6,18 @@
 #include <driver/gpio.h>
 #include <driver/ledc.h>
 #include <driver/spi_master.h>
+#include <esp_idf_version.h>
 #include <esp_lcd_gc9a01.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lvgl_port.h>
 #include <esp_log.h>
-#include <esp_idf_version.h>
 
 static const char *TAG = "display";
 
 static esp_lcd_panel_io_handle_t s_io = nullptr;
 static esp_lcd_panel_handle_t s_panel = nullptr;
-static lv_display_t *s_disp = nullptr;
+static lv_disp_t *s_disp = nullptr;
 static bool s_ready = false;
 
 static void backlight_init(void)
@@ -48,9 +48,15 @@ void display_set_backlight(bool on)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
+#if LVGL_VERSION_MAJOR >= 9
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
+#else
+static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+{
+    (void)drv;
+#endif
     it7259_point_t point = {};
     if (it7259_read(&point) != ESP_OK || !point.pressed) {
         data->state = LV_INDEV_STATE_RELEASED;
@@ -121,9 +127,6 @@ esp_err_t display_init(void)
     disp_cfg.rotation.mirror_x = false;
     disp_cfg.rotation.mirror_y = false;
     disp_cfg.flags.buff_dma = true;
-#if defined(LVGL_VERSION_MAJOR) && (LVGL_VERSION_MAJOR >= 9)
-    disp_cfg.flags.swap_bytes = true;
-#endif
 
     s_disp = lvgl_port_add_disp(&disp_cfg);
     if (s_disp == nullptr) {
@@ -133,10 +136,19 @@ esp_err_t display_init(void)
 
     esp_err_t touch_err = it7259_init();
     if (touch_err == ESP_OK) {
+#if LVGL_VERSION_MAJOR >= 9
         lv_indev_t *indev = lv_indev_create();
         lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(indev, touch_read_cb);
         lv_indev_set_display(indev, s_disp);
+#else
+        static lv_indev_drv_t indev_drv;
+        lv_indev_drv_init(&indev_drv);
+        indev_drv.type = LV_INDEV_TYPE_POINTER;
+        indev_drv.read_cb = touch_read_cb;
+        indev_drv.disp = s_disp;
+        lv_indev_drv_register(&indev_drv);
+#endif
     } else {
         ESP_LOGW(TAG, "Touch unavailable (%s); UI is display-only",
                  esp_err_to_name(touch_err));
@@ -157,3 +169,4 @@ bool display_is_ready(void)
 {
     return s_ready;
 }
+)
