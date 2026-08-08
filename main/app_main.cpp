@@ -851,16 +851,20 @@ extern "C" void app_main()
 	/*
 	 * Separate Fan endpoint so Apple / Google Home expose a speed slider.
 	 *
-	 * Matter FanMode: 0=Off 1=Low 2=Medium 3=High 4=On 5=Auto 6=Smart
-	 * Power-on default (app_driver): Low / 25%. PercentSetting must be
-	 * explicitly reported on power-on or Home keeps the slider at 0%.
+	 * Use Off/High/Auto (not Off/Low/Med/High/Auto): Apple Home's composed
+	 * AC fan control often leaves the vertical percent slider at 0% when the
+	 * device reports discrete FanMode Low/Med/High. With OffHighAuto, manual
+	 * speeds publish as FanMode=High plus PercentSetting (25/50/100), which
+	 * Home treats as a continuous percent slider.
+	 *
+	 * Power-on default (app_driver): IR Low -> FanMode High / 25%.
 	 */
 	fan::config_t fan_config = {};
 	fan_config.fan_control.fan_mode =
 	    static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
 	fan_config.fan_control.fan_mode_sequence =
 	    static_cast<uint8_t>(
-	        FanControl::FanModeSequenceEnum::kOffLowMedHighAuto);
+	        FanControl::FanModeSequenceEnum::kOffHighAuto);
 	fan_config.fan_control.percent_setting = nullable<uint8_t>(0);
 	fan_config.fan_control.percent_current = 0;
 

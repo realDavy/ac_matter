@@ -582,7 +582,9 @@ static bool PowerOn = false;
  * Fan endpoint synchronization helpers.
  *
  * FanMode Off and PercentSetting 0% are treated as whole-appliance power-off
- * commands. Non-zero percentages are normalized to 25%, 50% or 100%.
+ * commands. With FanModeSequence OffHighAuto, IR Low/Med/High all publish as
+ * FanMode=High plus a percent (25/50/100). Percent writes keep the requested
+ * percent for the Home slider while still mapping IR Fan to Low/Med/High bands.
  */
 static uint8_t app_driver_ir_fan_to_matter(
     int fan,
@@ -595,7 +597,8 @@ static uint8_t app_driver_ir_fan_to_percent(
 static void app_matter_schedule_whole_device_state(
     bool power_on,
     int mode,
-    int fan);
+    int fan,
+    int percent_override = -1);
 
 /*
  * Storage for IR air-conditioner protocol pairing data.
@@ -964,16 +967,18 @@ static uint8_t app_driver_ir_mode_to_matter(int mode)
 static uint8_t app_driver_ir_fan_to_matter(int fan, bool power_on)
 {
     if (!power_on) {
-        return 0; // Off
+        return static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
     }
 
-    switch (fan) {
-        case 0: return 5; // Auto
-        case 1: return 1; // Low
-        case 2: return 2; // Medium
-        case 3: return 3; // High
-        default: return 5;
+    /*
+     * OffHighAuto: only Off / High / Auto are valid FanMode values.
+     * IR Low/Med/High are distinguished by PercentSetting, not FanMode.
+     */
+    if (fan == 0) {
+        return static_cast<uint8_t>(FanControl::FanModeEnum::kAuto);
     }
+
+    return static_cast<uint8_t>(FanControl::FanModeEnum::kHigh);
 }
 
 static uint8_t app_driver_ir_fan_to_percent(int fan, bool power_on)
@@ -1031,8 +1036,8 @@ static void app_matter_log_update_error(
 /*
  * Update all Fan Control attributes as one logical state.
  *
- * Publish FanMode with PercentSetting / PercentCurrent so controllers see
- * the restored speed on power-on (default Low / 25%).
+ * Publish FanMode=High (or Auto) with PercentSetting / PercentCurrent so
+ * controllers see the restored speed on power-on (default IR Low / 25%).
  *
  * Use attribute::update only. MatterReportingAttributeChangeCallback must
  * not be called from set_defaults() on the app task — it asserts the CHIP
@@ -1108,7 +1113,8 @@ static void app_matter_update_fan_endpoint_state_now(
 static void app_matter_update_whole_device_state_now(
     bool power_on,
     int mode,
-    int fan)
+    int fan,
+    int percent_override = -1)
 {
     const bool previous_sync_state =
         s_matter_syncing_from_local;
@@ -1148,10 +1154,22 @@ static void app_matter_update_whole_device_state_now(
             fan,
             power_on);
 
-    const uint8_t fan_percent =
+    uint8_t fan_percent =
         app_driver_ir_fan_to_percent(
             fan,
             power_on);
+
+    /*
+     * Controllers (especially Apple Home) drag PercentSetting continuously.
+     * Keep the requested value so the slider does not jump back to 25/50/100
+     * while still mapping IR Fan to Low/Med/High bands for TX.
+     */
+    if (power_on && percent_override >= 0) {
+        if (percent_override > 100) {
+            percent_override = 100;
+        }
+        fan_percent = static_cast<uint8_t>(percent_override);
+    }
 
     app_matter_update_fan_endpoint_state_now(
         matter_fan_mode,
@@ -1175,14 +1193,16 @@ static void app_matter_update_whole_device_state_now(
 static void app_matter_schedule_whole_device_state(
     bool power_on,
     int mode,
-    int fan)
+    int fan,
+    int percent_override)
 {
     chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [power_on, mode, fan]() {
+        [power_on, mode, fan, percent_override]() {
             app_matter_update_whole_device_state_now(
                 power_on,
                 mode,
-                fan);
+                fan,
+                percent_override);
         });
 }
 
@@ -2566,13 +2586,17 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 case static_cast<uint8_t>(
                     FanControl::FanModeEnum::kOn):
 
+                    /*
+                     * Not part of OffHighAuto, but accept if a controller
+                     * still writes them (map to IR Low / 25%).
+                     */
                     PowerOn = true;
                     Fan = 1;
                     Key = 3;
 
                     ESP_LOGI(
                         TAG,
-                        "FanMode normalized: requested=%u -> Low/25%%",
+                        "FanMode normalized: requested=%u -> High/25%%",
                         static_cast<unsigned>(requested_mode));
                     break;
 
@@ -2585,19 +2609,30 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 
                     ESP_LOGI(
                         TAG,
-                        "FanMode Medium -> 50%%");
+                        "FanMode Medium -> High/50%%");
                     break;
 
                 case static_cast<uint8_t>(
                     FanControl::FanModeEnum::kHigh):
 
+                    /*
+                     * In OffHighAuto, High means "manual percent control",
+                     * not IR High. Keep the current IR band (default Low).
+                     */
                     PowerOn = true;
-                    Fan = 3;
+                    if (Fan == 0) {
+                        Fan = 1;
+                    }
                     Key = 3;
 
                     ESP_LOGI(
                         TAG,
-                        "FanMode High -> 100%%");
+                        "FanMode High (manual): IR Fan=%d Percent=%u%%",
+                        Fan,
+                        static_cast<unsigned>(
+                            app_driver_ir_fan_to_percent(
+                                Fan,
+                                true)));
                     break;
 
                 case static_cast<uint8_t>(
@@ -2647,6 +2682,11 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                     TAG,
                     "Fan PercentSetting 0%% received: "
                     "turning whole device Off");
+
+                app_matter_schedule_whole_device_state(
+                    PowerOn,
+                    Mode,
+                    Fan);
             } else {
                 PowerOn = true;
 
@@ -2656,34 +2696,30 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 
                 Key = 3;
 
-                const uint8_t normalized_mode =
+                const uint8_t matter_fan_mode =
                     app_driver_ir_fan_to_matter(
-                        Fan,
-                        true);
-
-                const uint8_t normalized_percent =
-                    app_driver_ir_fan_to_percent(
                         Fan,
                         true);
 
                 ESP_LOGI(
                     TAG,
-                    "Fan percentage normalized: requested=%u%% -> "
-                    "Fan=%d FanMode=%u Percent=%u%%",
+                    "Fan percentage: requested=%u%% -> "
+                    "Fan=%d FanMode=%u (keep Percent=%u%%)",
                     static_cast<unsigned>(requested_percent),
                     Fan,
-                    static_cast<unsigned>(normalized_mode),
-                    static_cast<unsigned>(normalized_percent));
-            }
+                    static_cast<unsigned>(matter_fan_mode),
+                    static_cast<unsigned>(requested_percent));
 
-            /*
-             * 0% publishes complete Off state; a non-zero setting restores
-             * Room AC OnOff and Thermostat SystemMode as well as Fan state.
-             */
-            app_matter_schedule_whole_device_state(
-                PowerOn,
-                Mode,
-                Fan);
+                /*
+                 * Preserve the controller's percent so Home's continuous
+                 * slider tracks the drag; IR still uses Low/Med/High bands.
+                 */
+                app_matter_schedule_whole_device_state(
+                    PowerOn,
+                    Mode,
+                    Fan,
+                    requested_percent);
+            }
         }
     }
     else if (endpoint_id == temp_light_endpoint_id) {
@@ -2745,7 +2781,7 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      *   PercentCurrent        = 0%
      *
      * Keep the last/default IR fan level at Low for the next power-on
-     * or non-zero fan-speed command (Matter Low / 25%).
+     * or non-zero fan-speed command (FanMode High / 25%).
      */
     PowerOn = false;
     Mode = 1;
