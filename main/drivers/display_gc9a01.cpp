@@ -11,6 +11,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lvgl_port.h>
 #include <esp_log.h>
+#include <esp_idf_version.h>
 
 static const char *TAG = "display";
 

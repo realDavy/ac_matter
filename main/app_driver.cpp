@@ -2225,7 +2225,7 @@ void app_driver_ui_set_light_brightness(uint8_t level_1_254)
     ws2812_temp_light_set_brightness(level_1_254);
 
     chip::DeviceLayer::SystemLayer().ScheduleLambda([level_1_254]() {
-        esp_matter_attr_val_t val = esp_matter_uint8(level_1_254);
+        esp_matter_attr_val_t val = esp_matter_nullable_uint8(level_1_254);
         s_matter_syncing_from_local = true;
         attribute::update(
             temp_light_endpoint_id,
