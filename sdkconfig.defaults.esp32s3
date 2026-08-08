@@ -1,0 +1,1 @@
+# ESP32-S3 specific defaults (applied automatically when IDF_TARGET=esp32s3)
