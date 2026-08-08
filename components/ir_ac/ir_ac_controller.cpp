@@ -370,7 +370,7 @@ bool IrAcController::decode_frame_to_state_(AcLogicalState *logical,
 
     stdAc::state_t state;
     IRac::initState(&state);
-    if (!decodeToState(&results, &state)) {
+    if (!IRAcUtils::decodeToState(&results, &state)) {
         ESP_LOGW(TAG, "decodeToState failed for %s",
                  typeToString(results.decode_type).c_str());
         return false;
