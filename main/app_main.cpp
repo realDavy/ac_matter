@@ -50,6 +50,7 @@
 
 static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
+uint16_t fan_endpoint_id = 0;
 uint16_t humidity_sensor_endpoint_id = 0;
 uint16_t temp_light_endpoint_id = 0;
 
@@ -848,37 +849,58 @@ extern "C" void app_main()
 	    thermostat_cluster, 100); // 1.00°C
 
 	/*
-	 * FanControl on the Room AC endpoint (Matter optional for device type
-	 * 0x0072). A sibling Fan endpoint (0x002B) was previously used so some
-	 * UIs exposed a speed slider, but Apple Home's composed AC tile binds
-	 * the vertical fan percent control to FanControl on the RAC endpoint
-	 * itself — reports on a separate Fan EP were ACK'd while the slider
-	 * stayed at 0%.
+	 * Sibling Fan endpoint (device type 0x002B) so Apple Home's composed AC
+	 * tile exposes the vertical fan-speed slider. Putting FanControl only on
+	 * the Room AC endpoint made that slider disappear (Home kept the light
+	 * control instead).
 	 *
 	 * OffHighAuto: IR Low/Med/High publish as FanMode=High + percent
 	 * (25/50/100). Power-on default: IR Low -> High / 25%.
+	 *
+	 * Also add OnOff on this Fan endpoint (fan::config_t has no on_off).
+	 * Home treats Fan OnOff as the master switch for the percent slider;
+	 * without it the slider can stick at 0% even when PercentSetting is 25.
 	 */
-	cluster::fan_control::config_t fan_control_config = {};
-	fan_control_config.fan_mode =
+	fan::config_t fan_config = {};
+	fan_config.fan_control.fan_mode =
 	    static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
-	fan_control_config.fan_mode_sequence =
+	fan_config.fan_control.fan_mode_sequence =
 	    static_cast<uint8_t>(
 	        FanControl::FanModeSequenceEnum::kOffHighAuto);
-	fan_control_config.percent_setting = nullable<uint8_t>(0);
-	fan_control_config.percent_current = 0;
+	fan_config.fan_control.percent_setting = nullable<uint8_t>(0);
+	fan_config.fan_control.percent_current = 0;
 
-	cluster_t *fan_cluster = cluster::fan_control::create(
-	    endpoint,
-	    &fan_control_config,
-	    CLUSTER_FLAG_SERVER);
+	endpoint_t *fan_endpoint = fan::create(
+	    node,
+	    &fan_config,
+	    ENDPOINT_FLAG_NONE,
+	    room_air_conditioner_handle);
+	ABORT_APP_ON_FAILURE(fan_endpoint != nullptr,
+	    ESP_LOGE(TAG, "Failed to create fan endpoint"));
+
+	fan_endpoint_id = endpoint::get_id(fan_endpoint);
+	ESP_LOGI(TAG, "Fan endpoint created with endpoint_id %d",
+	         fan_endpoint_id);
+
+	cluster_t *fan_cluster =
+	    cluster::get(fan_endpoint, FanControl::Id);
 	ABORT_APP_ON_FAILURE(
 	    fan_cluster != nullptr,
-	    ESP_LOGE(TAG, "Failed to create Fan Control on Room AC"));
+	    ESP_LOGE(TAG, "Failed to get Fan Control cluster"));
 
 	cluster::fan_control::feature::fan_auto::add(fan_cluster);
-	ESP_LOGI(TAG,
-	         "Fan Control cluster added to Room AC endpoint %d",
-	         room_air_conditioner_endpoint_id);
+
+	cluster::on_off::config_t fan_on_off_config;
+	fan_on_off_config.on_off = false;
+	cluster_t *fan_on_off_cluster = cluster::on_off::create(
+	    fan_endpoint,
+	    &fan_on_off_config,
+	    CLUSTER_FLAG_SERVER);
+	ABORT_APP_ON_FAILURE(
+	    fan_on_off_cluster != nullptr,
+	    ESP_LOGE(TAG, "Failed to create Fan OnOff cluster"));
+	ESP_LOGI(TAG, "Fan OnOff cluster added on endpoint %d",
+	         fan_endpoint_id);
 
 	/*
 	 * Optional SHT30 ambient humidity endpoint.

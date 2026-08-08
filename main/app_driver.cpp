@@ -39,6 +39,7 @@ using namespace esp_matter;
 
 static const char *TAG = "app_driver";
 extern uint16_t room_air_conditioner_endpoint_id;
+extern uint16_t fan_endpoint_id;
 extern uint16_t temp_light_endpoint_id;
 static const char *TAG_IR = "ir_ac_matter";
 
@@ -761,9 +762,10 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
     }
 
     /*
-     * OnOff, Thermostat SystemMode and FanControl on the Room AC endpoint
-     * represent the same physical appliance. Publish one complete state so
-     * every subscribed controller sees consistent values.
+     * Room AC OnOff / Thermostat SystemMode and the sibling Fan endpoint
+     * (OnOff + FanControl) represent the same physical appliance. Publish
+     * one complete state so every subscribed controller sees consistent
+     * values.
      *
      * When PowerOn becomes true, Mode still contains the last active
      * non-Off mode and is therefore used to restore SystemMode.
@@ -1033,10 +1035,12 @@ static void app_matter_log_update_error(
 }
 
 /*
- * Update all Fan Control attributes as one logical state.
+ * Update all Fan endpoint attributes as one logical state.
  *
- * Publish FanMode=High (or Auto) with PercentSetting / PercentCurrent so
- * controllers see the restored speed on power-on (default IR Low / 25%).
+ * Apple Home treats Fan OnOff as the master switch for the vertical percent
+ * slider: while OnOff is Off, PercentCurrent is shown as 0% even if
+ * FanMode / PercentSetting were updated. Keep OnOff aligned with FanMode so
+ * power-on restores a visible non-zero speed (default Low / 25%).
  *
  * Use attribute::update only. MatterReportingAttributeChangeCallback must
  * not be called from set_defaults() on the app task — it asserts the CHIP
@@ -1054,28 +1058,46 @@ static void app_matter_update_fan_endpoint_state_now(
 
     s_matter_syncing_from_local = true;
 
+    const bool fan_on =
+        matter_fan_mode !=
+        static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
+
+    esp_matter_attr_val_t on_off_val =
+        esp_matter_bool(fan_on);
+
+    app_matter_log_update_error(
+        "Fan OnOff",
+        attribute::update(
+            fan_endpoint_id,
+            OnOff::Id,
+            OnOff::Attributes::OnOff::Id,
+            &on_off_val));
+
     /*
      * Percent first, then FanMode, so a controller that reacts to FanMode
-     * already sees a non-zero percent.
+     * already sees a non-zero percent. Force 0% when Off.
      */
+    const uint8_t percent_current_value =
+        fan_on ? fan_percent : static_cast<uint8_t>(0);
+
     esp_matter_attr_val_t percent_current =
-        esp_matter_uint8(fan_percent);
+        esp_matter_uint8(percent_current_value);
 
     app_matter_log_update_error(
         "PercentCurrent",
         attribute::update(
-            room_air_conditioner_endpoint_id,
+            fan_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::PercentCurrent::Id,
             &percent_current));
 
     esp_matter_attr_val_t percent_setting =
-        esp_matter_nullable_uint8(fan_percent);
+        esp_matter_nullable_uint8(percent_current_value);
 
     app_matter_log_update_error(
         "PercentSetting",
         attribute::update(
-            room_air_conditioner_endpoint_id,
+            fan_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::PercentSetting::Id,
             &percent_setting));
@@ -1086,7 +1108,7 @@ static void app_matter_update_fan_endpoint_state_now(
     app_matter_log_update_error(
         "FanMode",
         attribute::update(
-            room_air_conditioner_endpoint_id,
+            fan_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::FanMode::Id,
             &fan_mode_val));
@@ -1096,9 +1118,10 @@ static void app_matter_update_fan_endpoint_state_now(
 
     ESP_LOGI(
         TAG,
-        "Fan Control synchronized: FanMode=%u Percent=%u",
+        "Fan endpoint synchronized: OnOff=%s FanMode=%u Percent=%u",
+        fan_on ? "On" : "Off",
         static_cast<unsigned>(matter_fan_mode),
-        static_cast<unsigned>(fan_percent));
+        static_cast<unsigned>(percent_current_value));
 }
 
 /*
@@ -2556,8 +2579,34 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 ESP_LOGI(TAG, "Air-conditioner operating mode update received: %d", matter_mode);
             }
 		}
-        // Fan Control lives on the Room AC endpoint (not a sibling Fan EP).
-        else if (cluster_id == FanControl::Id) {
+	}
+	// Branch 3: Fan endpoint (OnOff master switch + Fan Control)
+    else if (endpoint_id == fan_endpoint_id &&
+             cluster_id == OnOff::Id) {
+
+        if (attribute_id == OnOff::Attributes::OnOff::Id) {
+            PowerOn = val->val.b;
+            Key = 4;
+
+            ESP_LOGI(
+                TAG,
+                "Fan OnOff %s received: turning whole device %s",
+                PowerOn ? "On" : "Off",
+                PowerOn ? "On" : "Off");
+
+            /*
+             * Fan OnOff is coupled to the appliance. Turning the fan On
+             * restores Thermostat SystemMode from the retained Mode and
+             * republishes FanMode + percent (default Low / 25%).
+             */
+            app_matter_schedule_whole_device_state(
+                PowerOn,
+                Mode,
+                Fan);
+        }
+    }
+    else if (endpoint_id == fan_endpoint_id &&
+             cluster_id == FanControl::Id) {
 
         if (attribute_id ==
             FanControl::Attributes::FanMode::Id) {
@@ -2718,8 +2767,7 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                     requested_percent);
             }
         }
-        }
-	}
+    }
     else if (endpoint_id == temp_light_endpoint_id) {
         if (cluster_id == OnOff::Id &&
             attribute_id == OnOff::Attributes::OnOff::Id) {
@@ -2774,6 +2822,7 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      * Force a deterministic whole-device startup state:
      *   Room AC OnOff         = Off
      *   Thermostat SystemMode = Off
+     *   Fan OnOff             = Off
      *   FanMode               = Off
      *   PercentSetting        = 0%
      *   PercentCurrent        = 0%
@@ -2844,8 +2893,8 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
             &system_mode_val));
 
     /*
-     * Publish FanControl Off / 0%. Internal Fan remains Low so the next
-     * power-on restores Low / 25%.
+     * Publish the complete fan endpoint Off state (OnOff + FanControl).
+     * Internal Fan remains Low so the next power-on restores Low / 25%.
      */
     app_matter_update_fan_endpoint_state_now(
         static_cast<uint8_t>(FanControl::FanModeEnum::kOff),
