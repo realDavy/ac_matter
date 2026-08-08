@@ -849,72 +849,37 @@ extern "C" void app_main()
 	    thermostat_cluster, 100); // 1.00°C
 
 	/*
-	 * Create a separate Fan endpoint.
+	 * Separate Fan endpoint so Apple / Google Home expose a speed slider.
 	 *
-	 * This is only for testing whether Apple / Google will show fan speed
-	 * when FanControl is exposed as a standard Fan device endpoint instead
-	 * of being attached to the Room Air Conditioner endpoint.
+	 * Matter FanMode: 0=Off 1=Low 2=Medium 3=High 4=On 5=Auto 6=Smart
+	 * Power-on default (app_driver): Low / 25%. PercentSetting must be
+	 * explicitly reported on power-on or Home keeps the slider at 0%.
 	 */
 	fan::config_t fan_config = {};
-	
-	/*
-	 * Matter FanMode:
-	 * 0 = Off
-	 * 1 = Low
-	 * 2 = Medium
-	 * 3 = High
-	 * 4 = On
-	 * 5 = Auto
-	 * 6 = Smart
-	 */
 	fan_config.fan_control.fan_mode =
-	    static_cast<uint8_t>(
-	        FanControl::FanModeEnum::kOff
-	    );
-	
+	    static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
 	fan_config.fan_control.fan_mode_sequence =
 	    static_cast<uint8_t>(
-	        FanControl::FanModeSequenceEnum::kOffLowMedHighAuto
-	    );
-	
-	fan_config.fan_control.percent_setting =
-	    nullable<uint8_t>(0);
-	
+	        FanControl::FanModeSequenceEnum::kOffLowMedHighAuto);
+	fan_config.fan_control.percent_setting = nullable<uint8_t>(0);
 	fan_config.fan_control.percent_current = 0;
-	/*
-	 * FanModeSequence:
-	 * The target sequence is Off / Low / Medium / High / Auto.
-	 * Use the enum values defined in the local fan_control.h file.
-	 */
-	//fan_config.fan_control.fan_mode_sequence = FanControl::FanModeSequenceEnum::kOffLowMedHighAuto;
-	
-	/*
-	 * Keep PercentSetting and PercentCurrent so Apple Home and
-	 * Google Home are more likely to expose fan-speed controls.
-	 */
-	//fan_config.fan_control.percent_setting = nullable<uint8_t>(50);
-	//fan_config.fan_control.percent_current = 50;
-	
+
 	endpoint_t *fan_endpoint = fan::create(
 	    node,
 	    &fan_config,
 	    ENDPOINT_FLAG_NONE,
-	    room_air_conditioner_handle
-	);
-	
+	    room_air_conditioner_handle);
 	ABORT_APP_ON_FAILURE(fan_endpoint != nullptr,
 	    ESP_LOGE(TAG, "Failed to create fan endpoint"));
-	
+
 	fan_endpoint_id = endpoint::get_id(fan_endpoint);
 	ESP_LOGI(TAG, "Fan endpoint created with endpoint_id %d", fan_endpoint_id);
 
 	cluster_t *fan_cluster =
 	    cluster::get(fan_endpoint, FanControl::Id);
-	
 	ABORT_APP_ON_FAILURE(
 	    fan_cluster != nullptr,
-	    ESP_LOGE(TAG, "Failed to get Fan Control cluster")
-	);
+	    ESP_LOGE(TAG, "Failed to get Fan Control cluster"));
 
 	cluster::fan_control::feature::fan_auto::add(fan_cluster);
 
