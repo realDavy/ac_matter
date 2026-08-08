@@ -23,13 +23,17 @@
 | 状态 LED | GPIO11，表示配对/配网/待机等状态 |
 | BOOT 键 | **双击** Alt 遍历协议；**长按 ~5s** 恢复出厂 |
 
-Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`；Root 也占槽位，设为 4 会在创建灯光端点时 abort 重启）：
+Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`；Root 也占槽位）：
 
-1. **Room Air Conditioner** — 开关 / 温控（Thermostat）  
-2. **Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
-3. **Dimmable Light** — WS2812 氛围灯（开关 + 亮度）  
+0. **Root** — 桥接节点身份（`AC Remote`）  
+1. **Aggregator** — 聚合桥接配件  
+2. **Bridged Air Conditioner** — 开关 / 温控（Thermostat）  
+3. **Bridged Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
+4. **Bridged Dimmable Light** — WS2812 氛围灯（开关 + 亮度）  
 
-风速不通过 Matter 暴露；本机发出的红外指令固定为 **自动风速**。
+空调 / 湿度 / 灯光以 **Bridged Node** 挂在 Aggregator 下，Apple Home 中会作为**独立配件**显示（可分别命名、放不同房间）。  
+风速不通过 Matter 暴露；本机发出的红外指令固定为 **自动风速**。  
+端点布局变更后需在 Home 中**移除并重新添加**配件。
 
 ---
 
@@ -395,7 +399,8 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 |------|------|
 | 编译缺 `IRremoteESP8266` | `git submodule update --init --recursive` |
 | 目标芯片不对 | 必须 `idf.py set-target esp32s3`（不再支持默认 C3） |
-| 端点创建失败 / 湿度或灯不出现 / 启动 abort 重启 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8` 后重新 `fullclean` + 编译；串口若见 `Failed to create dimmable light endpoint` 即为此项 |
+| 端点创建失败 / 湿度或灯不出现 / 启动 abort 重启 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8` 后重新 `fullclean` + 编译；串口若见 bridged/aggregator 创建失败即为此项 |
+| Home 里空调和灯仍粘在一起 | 确认已刷含 Aggregator+Bridged Node 的固件，并在 Home 中**删除旧配件后重新配对**（仅 OTA/重刷不够） |
 | 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；配网页在圆屏，串口会打 `UI Matter code:` / CHIP onboarding QR |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
 | 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |

@@ -187,6 +187,87 @@ static void app_set_default_node_label(node_t *node)
     ESP_LOGI(TAG, "NodeLabel set to \"%s\"", name);
 }
 
+/*
+ * Apple Home treats a flat multi-endpoint Matter node as one accessory with
+ * multiple services. Expose application endpoints as Bridged Nodes under an
+ * Aggregator so AC / humidity / light appear as separate Home accessories.
+ */
+static void app_set_bridged_device_identity(
+    endpoint_t *endpoint,
+    const char *node_label,
+    const char *product_name)
+{
+    cluster_t *basic =
+        cluster::get(endpoint, BridgedDeviceBasicInformation::Id);
+    ABORT_APP_ON_FAILURE(
+        basic != nullptr,
+        ESP_LOGE(TAG, "Bridged Device Basic Information missing"));
+
+    char label[cluster::bridged_device_basic_information::k_max_node_label_length + 1];
+    char product[cluster::bridged_device_basic_information::k_max_product_name_length + 1];
+    char vendor[] = "aidaegis";
+
+    std::strncpy(label, node_label, sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
+    std::strncpy(product, product_name, sizeof(product) - 1);
+    product[sizeof(product) - 1] = '\0';
+
+    ABORT_APP_ON_FAILURE(
+        cluster::bridged_device_basic_information::attribute::create_node_label(
+            basic,
+            label,
+            static_cast<uint16_t>(std::strlen(label))) != nullptr,
+        ESP_LOGE(TAG, "Failed to create bridged NodeLabel \"%s\"", label));
+
+    ABORT_APP_ON_FAILURE(
+        cluster::bridged_device_basic_information::attribute::create_product_name(
+            basic,
+            product,
+            static_cast<uint16_t>(std::strlen(product))) != nullptr,
+        ESP_LOGE(TAG, "Failed to create bridged ProductName \"%s\"", product));
+
+    ABORT_APP_ON_FAILURE(
+        cluster::bridged_device_basic_information::attribute::create_vendor_name(
+            basic,
+            vendor,
+            static_cast<uint16_t>(std::strlen(vendor))) != nullptr,
+        ESP_LOGE(TAG, "Failed to create bridged VendorName"));
+}
+
+static endpoint_t *app_create_bridged_endpoint(
+    node_t *node,
+    endpoint_t *aggregator,
+    const char *node_label,
+    const char *product_name,
+    void *priv_data)
+{
+    bridged_node::config_t bridged_config;
+    bridged_config.bridged_device_basic_information.reachable = true;
+
+    endpoint_t *endpoint = bridged_node::create(
+        node,
+        &bridged_config,
+        ENDPOINT_FLAG_BRIDGE,
+        priv_data);
+    ABORT_APP_ON_FAILURE(
+        endpoint != nullptr,
+        ESP_LOGE(TAG, "Failed to create bridged endpoint for \"%s\"",
+                 node_label));
+
+    app_set_bridged_device_identity(endpoint, node_label, product_name);
+
+    ABORT_APP_ON_FAILURE(
+        endpoint::set_parent_endpoint(endpoint, aggregator) == ESP_OK,
+        ESP_LOGE(TAG, "Failed to parent bridged endpoint \"%s\" under aggregator",
+                 node_label));
+
+    ESP_LOGI(TAG,
+             "Bridged endpoint \"%s\" created with endpoint_id %d",
+             node_label,
+             endpoint::get_id(endpoint));
+    return endpoint;
+}
+
 static uint32_t app_count_active_subscriptions_locked()
 {
     auto *engine =
@@ -767,6 +848,30 @@ extern "C" void app_main()
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
     app_set_default_node_label(node);
+
+    /*
+     * Bridge topology (Apple Home shows each bridged endpoint separately):
+     *   EP0 Root ("AC Remote")
+     *   EP1 Aggregator
+     *     ├─ Bridged Room Air Conditioner
+     *     ├─ Bridged Humidity Sensor
+     *     └─ Bridged Dimmable Light
+     *
+     * Mixing native app endpoints with bridged ones is poorly supported by
+     * Apple/Google, so every application device type is bridged.
+     */
+    aggregator::config_t aggregator_config;
+    endpoint_t *aggregator = endpoint::aggregator::create(
+        node,
+        &aggregator_config,
+        ENDPOINT_FLAG_NONE,
+        nullptr);
+    ABORT_APP_ON_FAILURE(
+        aggregator != nullptr,
+        ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
+    ESP_LOGI(TAG, "Aggregator created with endpoint_id %d",
+             endpoint::get_id(aggregator));
+
     room_air_conditioner::config_t room_air_conditioner_config;
     room_air_conditioner_config.on_off.on_off = DEFAULT_POWER;
 	auto &thermostat = room_air_conditioner_config.thermostat;
@@ -812,11 +917,21 @@ extern "C" void app_main()
 	    .local_temperature =
 	        DEFAULT_TARGET_TEMP_X100;
 
-	endpoint_t *endpoint = room_air_conditioner::create(node, &room_air_conditioner_config, ENDPOINT_FLAG_NONE, room_air_conditioner_handle);
-    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create room air conditioner endpoint"));
+	endpoint_t *endpoint = app_create_bridged_endpoint(
+	    node,
+	    aggregator,
+	    "Air Conditioner",
+	    "Air Conditioner",
+	    room_air_conditioner_handle);
+	ABORT_APP_ON_FAILURE(
+	    room_air_conditioner::add(
+	        endpoint,
+	        &room_air_conditioner_config) == ESP_OK,
+	    ESP_LOGE(TAG, "Failed to add Room Air Conditioner device type"));
 
     room_air_conditioner_endpoint_id = endpoint::get_id(endpoint);
-    ESP_LOGI(TAG, "Room Air Conditioner created with endpoint_id %d", room_air_conditioner_endpoint_id);
+    ESP_LOGI(TAG, "Room Air Conditioner bridged endpoint_id %d",
+             room_air_conditioner_endpoint_id);
 	
 	cluster_t *thermostat_cluster = cluster::get(endpoint, Thermostat::Id);
 	ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr,
@@ -864,16 +979,20 @@ extern "C" void app_main()
 	humidity_sensor_config.relative_humidity_measurement.max_measured_value =
 	    nullable<uint16_t>(10000);
 
-	endpoint_t *humidity_endpoint = humidity_sensor::create(
+	endpoint_t *humidity_endpoint = app_create_bridged_endpoint(
 	    node,
-	    &humidity_sensor_config,
-	    ENDPOINT_FLAG_NONE,
+	    aggregator,
+	    "Humidity",
+	    "Humidity Sensor",
 	    nullptr);
-	ABORT_APP_ON_FAILURE(humidity_endpoint != nullptr,
-	    ESP_LOGE(TAG, "Failed to create humidity sensor endpoint"));
+	ABORT_APP_ON_FAILURE(
+	    humidity_sensor::add(
+	        humidity_endpoint,
+	        &humidity_sensor_config) == ESP_OK,
+	    ESP_LOGE(TAG, "Failed to add Humidity Sensor device type"));
 
 	humidity_sensor_endpoint_id = endpoint::get_id(humidity_endpoint);
-	ESP_LOGI(TAG, "Humidity sensor created with endpoint_id %d",
+	ESP_LOGI(TAG, "Humidity sensor bridged endpoint_id %d",
 	         humidity_sensor_endpoint_id);
 
 	/*
@@ -884,16 +1003,20 @@ extern "C" void app_main()
 	dimmable_light::config_t temp_light_config;
 	temp_light_config.on_off.on_off = true;
 	temp_light_config.level_control.current_level = 180;
-	endpoint_t *temp_light_endpoint = dimmable_light::create(
+	endpoint_t *temp_light_endpoint = app_create_bridged_endpoint(
 	    node,
-	    &temp_light_config,
-	    ENDPOINT_FLAG_NONE,
+	    aggregator,
+	    "Ambient Light",
+	    "Ambient Light",
 	    nullptr);
-	ABORT_APP_ON_FAILURE(temp_light_endpoint != nullptr,
-	    ESP_LOGE(TAG, "Failed to create dimmable light endpoint"));
+	ABORT_APP_ON_FAILURE(
+	    dimmable_light::add(
+	        temp_light_endpoint,
+	        &temp_light_config) == ESP_OK,
+	    ESP_LOGE(TAG, "Failed to add Dimmable Light device type"));
 
 	temp_light_endpoint_id = endpoint::get_id(temp_light_endpoint);
-	ESP_LOGI(TAG, "Ambient dimmable light created with endpoint_id %d",
+	ESP_LOGI(TAG, "Ambient dimmable light bridged endpoint_id %d",
 	         temp_light_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD

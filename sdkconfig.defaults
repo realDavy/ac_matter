@@ -18,9 +18,9 @@ CONFIG_PARTITION_TABLE_OFFSET=0xC000
 # Chip shell costs RAM during BLE PASE; enable locally if needed for debug
 CONFIG_ENABLE_CHIP_SHELL=n
 
-# Dynamic endpoints: Root + Room AC + Fan + Humidity + WS2812 Dimmable Light.
+# Dynamic endpoints: Root + Aggregator + bridged RAC + Humidity + Light.
 # Must be > app endpoints alone — root/node also consumes a slot; 4 is too low
-# and causes boot-loop: "Failed to create dimmable light endpoint" + abort().
+# and causes boot-loop creating later endpoints + abort().
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=8
 
 #enable lwIP route hooks
