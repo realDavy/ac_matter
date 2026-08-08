@@ -15,7 +15,7 @@
 | 圆屏 UI（LVGL） | 默认中文，右上角可切英文 |
 | Matter 配网 | 未配网时屏上显示动态 `MT:...` 二维码 + 数字配对码（与串口一致） |
 | 红外学习 | 配网后屏上「开始学习」；学习中 WS2812 **黄色呼吸**；BOOT **单击不再学码** |
-| Matter 空调控制 | 开关、制冷/制热、整度设定温度、风扇档位；屏上与手机双向同步 |
+| Matter 空调控制 | 开关、制冷/制热、整度设定温度；风速固定为自动（不在 Home 显示风速控件） |
 | 灯光页 | 空调页左滑进入；夜间关闭 / 手动 / 温感呼吸（默认）/ 纯色 / 彩虹 / 呼吸白 |
 | Matter 灯光 | **On/Off + 亮度（LevelControl）**；氛围模式仅屏上选（方案 A） |
 | 设备身份 | Manufacturer=`aidaegis`；设备名=`AC Remote`；序列号随机生成并以 MAC 后四位结尾 |
@@ -26,9 +26,10 @@
 Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`；Root 也占槽位，设为 4 会在创建灯光端点时 abort 重启）：
 
 1. **Room Air Conditioner** — 开关 / 温控（Thermostat）  
-2. **Fan** — FanControl 风速（Off/High/Auto + Percent/MultiSpeed）+ OnOff；挂在 Room AC 下（PartsList）；关机保留 PercentSetting（避免 Home 竖条卡在 0%）  
-3. **Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
-4. **Dimmable Light** — WS2812 氛围灯（开关 + 亮度）
+2. **Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
+3. **Dimmable Light** — WS2812 氛围灯（开关 + 亮度）  
+
+风速不通过 Matter 暴露；本机发出的红外指令固定为 **自动风速**。
 
 ---
 

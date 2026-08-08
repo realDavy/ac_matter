@@ -39,7 +39,6 @@ using namespace esp_matter;
 
 static const char *TAG = "app_driver";
 extern uint16_t room_air_conditioner_endpoint_id;
-extern uint16_t fan_endpoint_id;
 extern uint16_t temp_light_endpoint_id;
 static const char *TAG_IR = "ir_ac_matter";
 
@@ -559,7 +558,7 @@ struct ir_command_t {
 
     int temp = 25;
     int mode = 1;
-    int fan = 1;
+    int fan = 0; /* IR Auto */
     int key = 0;
     bool power_on = false;
 
@@ -575,30 +574,13 @@ static ir_worker_state_t s_ir_worker_state =
 
 static int Temp = 25;
 static int Mode = 1;
-static int Fan = 1;
+/* IR fan speed is fixed to Auto; Matter does not expose a fan control. */
+static int Fan = 0;
 static bool PowerOn = false;
-
-/*
- * Fan Control synchronization helpers (cluster on Room AC endpoint).
- *
- * FanMode Off and PercentSetting 0% are treated as whole-appliance power-off
- * commands. With FanModeSequence OffHighAuto, IR Low/Med/High all publish as
- * FanMode=High plus a percent (25/50/100). Percent writes keep the requested
- * percent for the Home slider while still mapping IR Fan to Low/Med/High bands.
- */
-static uint8_t app_driver_ir_fan_to_matter(
-    int fan,
-    bool power_on);
-
-static uint8_t app_driver_ir_fan_to_percent(
-    int fan,
-    bool power_on);
 
 static void app_matter_schedule_whole_device_state(
     bool power_on,
-    int mode,
-    int fan,
-    int percent_override = -1);
+    int mode);
 
 /*
  * Storage for IR air-conditioner protocol pairing data.
@@ -762,18 +744,16 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
     }
 
     /*
-     * Room AC OnOff / Thermostat SystemMode and the sibling Fan endpoint
-     * (OnOff + FanControl) represent the same physical appliance. Publish
-     * one complete state so every subscribed controller sees consistent
-     * values.
+     * Room AC OnOff and Thermostat SystemMode represent the appliance.
+     * Publish one complete state so every subscribed controller sees
+     * consistent values. IR fan stays Auto (no Matter fan endpoint).
      *
      * When PowerOn becomes true, Mode still contains the last active
      * non-Off mode and is therefore used to restore SystemMode.
      */
     app_matter_schedule_whole_device_state(
         PowerOn,
-        Mode,
-        Fan);
+        Mode);
 
     ESP_LOGI(
         TAG,
@@ -965,63 +945,6 @@ static uint8_t app_driver_ir_mode_to_matter(int mode)
     }
 }
 
-static uint8_t app_driver_ir_fan_to_matter(int fan, bool power_on)
-{
-    if (!power_on) {
-        return static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
-    }
-
-    /*
-     * OffHighAuto: only Off / High / Auto are valid FanMode values.
-     * IR Low/Med/High are distinguished by PercentSetting, not FanMode.
-     */
-    if (fan == 0) {
-        return static_cast<uint8_t>(FanControl::FanModeEnum::kAuto);
-    }
-
-    return static_cast<uint8_t>(FanControl::FanModeEnum::kHigh);
-}
-
-static uint8_t app_driver_ir_fan_to_percent(int fan, bool power_on)
-{
-    if (!power_on) {
-        return 0;
-    }
-
-    switch (fan) {
-        case 1: return 25;  // Low
-        case 2: return 50;  // Medium
-        case 3: return 100; // High
-        case 0:
-        default:
-            /*
-             * Auto has no exact fixed percentage. FanMode=Auto remains the
-             * authoritative value; use 100% to keep the endpoint active.
-             */
-            return 100;
-    }
-}
-
-static int app_driver_percent_to_ir_fan(uint8_t percent)
-{
-    /*
-     * PercentSetting=0% is handled as whole-appliance Off before this helper
-     * is called. The remaining non-zero range is normalized as follows:
-     *   1..33%   -> Low
-     *   34..66%  -> Medium
-     *   67..100% -> High
-     */
-    if (percent <= 33) {
-        return 1;
-    }
-
-    if (percent <= 66) {
-        return 2;
-    }
-
-    return 3;
-}
-
 static void app_matter_log_update_error(
     const char *name,
     esp_err_t err)
@@ -1035,149 +958,18 @@ static void app_matter_log_update_error(
 }
 
 /*
- * Last non-zero fan percent setpoint retained across Off.
- *
- * Apple Home's composed AC fan slider often does not refresh when the device
- * later reports a new PercentSetting. If Off also writes PercentSetting=0,
- * Home caches 0% and the slider stays empty after power-on even though we
- * report 25%. Keep the setpoint across Off; only PercentCurrent goes to 0.
- */
-static uint8_t s_retained_fan_percent = 25;
-
-/*
- * Update all Fan endpoint attributes as one logical state.
- *
- * Apple Home treats Fan OnOff as the master switch for the vertical percent
- * slider. Keep OnOff aligned with FanMode. PercentSetting / SpeedSetting hold
- * the retained setpoint even while Off; PercentCurrent / SpeedCurrent are 0
- * when Off.
- *
- * Use attribute::update only. MatterReportingAttributeChangeCallback must
- * not be called from set_defaults() on the app task — it asserts the CHIP
- * stack lock and boot-looped with "Chip stack locking error".
- *
- * The previous synchronization guard is restored so this helper can be used
- * both from a standalone scheduled lambda and from another local update block.
- */
-static void app_matter_update_fan_endpoint_state_now(
-    uint8_t matter_fan_mode,
-    uint8_t fan_percent)
-{
-    const bool previous_sync_state =
-        s_matter_syncing_from_local;
-
-    s_matter_syncing_from_local = true;
-
-    const bool fan_on =
-        matter_fan_mode !=
-        static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
-
-    if (fan_percent > 0) {
-        s_retained_fan_percent = fan_percent;
-    } else if (!fan_on) {
-        fan_percent = s_retained_fan_percent;
-    }
-
-    esp_matter_attr_val_t on_off_val =
-        esp_matter_bool(fan_on);
-
-    app_matter_log_update_error(
-        "Fan OnOff",
-        attribute::update(
-            fan_endpoint_id,
-            OnOff::Id,
-            OnOff::Attributes::OnOff::Id,
-            &on_off_val));
-
-    const uint8_t percent_setting_value = fan_percent;
-    const uint8_t percent_current_value =
-        fan_on ? percent_setting_value : static_cast<uint8_t>(0);
-
-    /*
-     * Setting first (non-zero even when Off), then current, then FanMode —
-     * so a controller that snapshots PercentSetting at Off still has 25%.
-     */
-    esp_matter_attr_val_t percent_setting =
-        esp_matter_nullable_uint8(percent_setting_value);
-
-    app_matter_log_update_error(
-        "PercentSetting",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::PercentSetting::Id,
-            &percent_setting));
-
-    esp_matter_attr_val_t percent_current =
-        esp_matter_uint8(percent_current_value);
-
-    app_matter_log_update_error(
-        "PercentCurrent",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::PercentCurrent::Id,
-            &percent_current));
-
-    esp_matter_attr_val_t speed_setting =
-        esp_matter_nullable_uint8(percent_setting_value);
-
-    app_matter_log_update_error(
-        "SpeedSetting",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::SpeedSetting::Id,
-            &speed_setting));
-
-    esp_matter_attr_val_t speed_current =
-        esp_matter_uint8(percent_current_value);
-
-    app_matter_log_update_error(
-        "SpeedCurrent",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::SpeedCurrent::Id,
-            &speed_current));
-
-    esp_matter_attr_val_t fan_mode_val =
-        esp_matter_enum8(matter_fan_mode);
-
-    app_matter_log_update_error(
-        "FanMode",
-        attribute::update(
-            fan_endpoint_id,
-            FanControl::Id,
-            FanControl::Attributes::FanMode::Id,
-            &fan_mode_val));
-
-    s_matter_syncing_from_local =
-        previous_sync_state;
-
-    ESP_LOGI(
-        TAG,
-        "Fan endpoint synchronized: OnOff=%s FanMode=%u "
-        "Setting=%u%% Current=%u%%",
-        fan_on ? "On" : "Off",
-        static_cast<unsigned>(matter_fan_mode),
-        static_cast<unsigned>(percent_setting_value),
-        static_cast<unsigned>(percent_current_value));
-}
-
-/*
- * Update every Matter attribute that represents the appliance's logical
- * power/mode/fan state. This must run on the CHIP thread.
+ * Update Matter attributes that represent the appliance's logical
+ * power/mode state. This must run on the CHIP thread.
  *
  * PowerOn is kept separate from Mode. Therefore an Off command does not erase
- * the last active IR mode, and a later Fan-originated On command can
- * restore Thermostat::SystemMode correctly.
+ * the last active IR mode, and a later On command can restore
+ * Thermostat::SystemMode correctly.
+ *
+ * Fan speed is not exposed over Matter; IR always uses Auto.
  */
 static void app_matter_update_whole_device_state_now(
     bool power_on,
-    int mode,
-    int fan,
-    int percent_override = -1)
+    int mode)
 {
     const bool previous_sync_state =
         s_matter_syncing_from_local;
@@ -1212,68 +1004,27 @@ static void app_matter_update_whole_device_state_now(
             Thermostat::Attributes::SystemMode::Id,
             &system_mode_val));
 
-    const uint8_t matter_fan_mode =
-        app_driver_ir_fan_to_matter(
-            fan,
-            power_on);
-
-    /*
-     * Always compute the retained setpoint from the IR fan band (or the
-     * controller override). When powering Off, still pass that setpoint so
-     * PercentSetting stays non-zero for Apple Home's cached slider value;
-     * PercentCurrent is cleared inside the fan sync helper.
-     */
-    uint8_t fan_percent =
-        app_driver_ir_fan_to_percent(
-            fan,
-            true);
-
-    /*
-     * Controllers (especially Apple Home) drag PercentSetting continuously.
-     * Keep the requested value so the slider does not jump back to 25/50/100
-     * while still mapping IR Fan to Low/Med/High bands for TX.
-     */
-    if (power_on && percent_override >= 0) {
-        if (percent_override > 100) {
-            percent_override = 100;
-        }
-        fan_percent = static_cast<uint8_t>(percent_override);
-    } else if (!power_on && s_retained_fan_percent > 0) {
-        fan_percent = s_retained_fan_percent;
-    }
-
-    app_matter_update_fan_endpoint_state_now(
-        matter_fan_mode,
-        fan_percent);
-
     s_matter_syncing_from_local =
         previous_sync_state;
 
     ESP_LOGI(
         TAG,
-        "Whole device synchronized: Power=%s Mode=%d Fan=%d "
-        "SystemMode=%u FanMode=%u Percent=%u",
+        "Whole device synchronized: Power=%s Mode=%d "
+        "SystemMode=%u (IR Fan=Auto)",
         power_on ? "On" : "Off",
         mode,
-        fan,
-        static_cast<unsigned>(matter_system_mode),
-        static_cast<unsigned>(matter_fan_mode),
-        static_cast<unsigned>(fan_percent));
+        static_cast<unsigned>(matter_system_mode));
 }
 
 static void app_matter_schedule_whole_device_state(
     bool power_on,
-    int mode,
-    int fan,
-    int percent_override)
+    int mode)
 {
     chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [power_on, mode, fan, percent_override]() {
+        [power_on, mode]() {
             app_matter_update_whole_device_state_now(
                 power_on,
-                mode,
-                fan,
-                percent_override);
+                mode);
         });
 }
 
@@ -1284,7 +1035,6 @@ static void app_matter_schedule_whole_device_state(
 static void app_matter_apply_parsed_ac_state_now(
     int temp_c,
     int mode,
-    int fan,
     bool power_on)
 {
     s_matter_syncing_from_local = true;
@@ -1365,52 +1115,26 @@ static void app_matter_apply_parsed_ac_state_now(
         }
     }
 
-    const uint8_t matter_fan_mode =
-        app_driver_ir_fan_to_matter(
-            fan,
-            power_on);
-
-    /*
-     * Setpoint from the IR fan band (always). Off still keeps PercentSetting
-     * at the retained value inside the fan sync helper.
-     */
-    const uint8_t fan_percent =
-        app_driver_ir_fan_to_percent(
-            fan,
-            true);
-
-    /*
-     * Parsed/actual AC power state is authoritative:
-     *   AC off -> FanMode Off, PercentCurrent 0, PercentSetting retained
-     *   AC on  -> current fan mode and normalized percentage
-     */
-    app_matter_update_fan_endpoint_state_now(
-        matter_fan_mode,
-        fan_percent);
-
     s_matter_syncing_from_local = false;
 
     ESP_LOGI(TAG,
              "Parsed AC state synchronized: Temp=%dC Mode=%d "
-             "Fan=%d Power=%s",
+             "Power=%s (IR Fan=Auto)",
              temp_c,
              mode,
-             fan,
              power_on ? "On" : "Off");
 }
 
 static void app_matter_schedule_parsed_ac_state(
     int temp_c,
     int mode,
-    int fan,
     bool power_on)
 {
     chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [temp_c, mode, fan, power_on]() {
+        [temp_c, mode, power_on]() {
             app_matter_apply_parsed_ac_state_now(
                 temp_c,
                 mode,
-                fan,
                 power_on);
         });
 }
@@ -1795,7 +1519,7 @@ static void app_driver_ir_worker_handle_pairing()
     if (ok) {
         Temp = 25;
         Mode = 1;
-        Fan = 1;
+        Fan = 0;
         PowerOn = true;
         s_ir_match_index = 0;
         s_ir_paired.store(true);
@@ -1842,13 +1566,16 @@ static void app_driver_ir_worker_parse_signal()
 
     Temp = app_driver_ir_temperature_to_celsius(parsed.temp_c);
     Mode = parsed.mode;
-    Fan = parsed.fan;
+    /* Matter/app IR TX always uses Auto; ignore remote fan band. */
+    Fan = 0;
     PowerOn = parsed.power;
 
-    ESP_LOGI(TAG_IR, "Parsed remote state: Temp=%d Mode=%d Fan=%d Power=%d",
-             Temp, Mode, Fan, static_cast<int>(PowerOn));
+    ESP_LOGI(TAG_IR,
+             "Parsed remote state: Temp=%d Mode=%d Fan(remote)=%d "
+             "Power=%d (kept IR Fan=Auto)",
+             Temp, Mode, parsed.fan, static_cast<int>(PowerOn));
 
-    app_matter_schedule_parsed_ac_state(Temp, Mode, Fan, PowerOn);
+    app_matter_schedule_parsed_ac_state(Temp, Mode, PowerOn);
     s_ir_worker_state = ir_worker_state_t::IDLE;
 }
 
@@ -2373,7 +2100,7 @@ void app_driver_ui_adjust_temp(int delta)
 
     const int16_t temp_x100 = static_cast<int16_t>(Temp * 100);
     app_matter_schedule_report_all_temperatures(temp_x100);
-    app_matter_schedule_whole_device_state(PowerOn, Mode, Fan);
+    app_matter_schedule_whole_device_state(PowerOn, Mode);
     app_driver_ir_queue_state(Temp, Mode, Fan, 0, PowerOn);
 }
 
@@ -2620,219 +2347,18 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 if (Key >= 0) {
                     /*
                      * Publish the complete logical appliance state. Off keeps
-                     * Mode unchanged; a non-Off mode restores OnOff,
-                     * SystemMode and FanControl consistently.
+                     * Mode unchanged; a non-Off mode restores OnOff and
+                     * SystemMode consistently. IR fan remains Auto.
                      */
                     app_matter_schedule_whole_device_state(
                         PowerOn,
-                        Mode,
-                        Fan);
+                        Mode);
                 }
 
                 ESP_LOGI(TAG, "Air-conditioner operating mode update received: %d", matter_mode);
             }
 		}
 	}
-	// Branch 3: Fan endpoint (OnOff master switch + Fan Control)
-    else if (endpoint_id == fan_endpoint_id &&
-             cluster_id == OnOff::Id) {
-
-        if (attribute_id == OnOff::Attributes::OnOff::Id) {
-            PowerOn = val->val.b;
-            Key = 4;
-
-            ESP_LOGI(
-                TAG,
-                "Fan OnOff %s received: turning whole device %s",
-                PowerOn ? "On" : "Off",
-                PowerOn ? "On" : "Off");
-
-            /*
-             * Fan OnOff is coupled to the appliance. Turning the fan On
-             * restores Thermostat SystemMode from the retained Mode and
-             * republishes FanMode + percent (default Low / 25%).
-             */
-            app_matter_schedule_whole_device_state(
-                PowerOn,
-                Mode,
-                Fan);
-        }
-    }
-    else if (endpoint_id == fan_endpoint_id &&
-             cluster_id == FanControl::Id) {
-
-        if (attribute_id ==
-            FanControl::Attributes::FanMode::Id) {
-
-            const uint8_t requested_mode =
-                val->val.u8;
-
-            switch (requested_mode) {
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kOff):
-
-                    PowerOn = false;
-                    Key = 4;
-
-                    ESP_LOGI(
-                        TAG,
-                        "FanMode Off received: turning whole device Off");
-                    break;
-
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kLow):
-
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kOn):
-
-                    /*
-                     * Not part of OffHighAuto, but accept if a controller
-                     * still writes them (map to IR Low / 25%).
-                     */
-                    PowerOn = true;
-                    Fan = 1;
-                    Key = 3;
-
-                    ESP_LOGI(
-                        TAG,
-                        "FanMode normalized: requested=%u -> High/25%%",
-                        static_cast<unsigned>(requested_mode));
-                    break;
-
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kMedium):
-
-                    PowerOn = true;
-                    Fan = 2;
-                    Key = 3;
-
-                    ESP_LOGI(
-                        TAG,
-                        "FanMode Medium -> High/50%%");
-                    break;
-
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kHigh):
-
-                    /*
-                     * In OffHighAuto, High means "manual percent control",
-                     * not IR High. Keep the current IR band (default Low).
-                     */
-                    PowerOn = true;
-                    if (Fan == 0) {
-                        Fan = 1;
-                    }
-                    Key = 3;
-
-                    ESP_LOGI(
-                        TAG,
-                        "FanMode High (manual): IR Fan=%d Percent=%u%%",
-                        Fan,
-                        static_cast<unsigned>(
-                            app_driver_ir_fan_to_percent(
-                                Fan,
-                                true)));
-                    break;
-
-                case static_cast<uint8_t>(
-                    FanControl::FanModeEnum::kAuto):
-
-                    PowerOn = true;
-                    Fan = 0;
-                    Key = 3;
-
-                    ESP_LOGI(
-                        TAG,
-                        "FanMode Auto -> 100%% display");
-                    break;
-
-                default:
-                    Key = -1;
-
-                    ESP_LOGW(
-                        TAG,
-                        "Unsupported FanMode: %u",
-                        static_cast<unsigned>(requested_mode));
-                    break;
-            }
-
-            if (Key >= 0) {
-                /*
-                 * A non-Off Fan command powers on the appliance and restores
-                 * Thermostat::SystemMode from the retained Mode value.
-                 */
-                app_matter_schedule_whole_device_state(
-                    PowerOn,
-                    Mode,
-                    Fan);
-            }
-        }
-        else if (attribute_id ==
-                     FanControl::Attributes::PercentSetting::Id ||
-                 attribute_id ==
-                     FanControl::Attributes::SpeedSetting::Id) {
-
-            const uint8_t requested_percent =
-                val->val.u8;
-
-            if (requested_percent == 0) {
-                PowerOn = false;
-                Key = 4;
-
-                ESP_LOGI(
-                    TAG,
-                    "Fan %s 0%% received: turning whole device Off "
-                    "(retain Setting=%u%%)",
-                    attribute_id ==
-                            FanControl::Attributes::SpeedSetting::Id
-                        ? "SpeedSetting"
-                        : "PercentSetting",
-                    static_cast<unsigned>(s_retained_fan_percent));
-
-                /*
-                 * Off clears PercentCurrent / FanMode / OnOff, but keeps the
-                 * previous non-zero PercentSetting so Home's slider cache
-                 * does not stick at 0% for the next power-on.
-                 */
-                app_matter_schedule_whole_device_state(
-                    PowerOn,
-                    Mode,
-                    Fan);
-            } else {
-                PowerOn = true;
-
-                Fan =
-                    app_driver_percent_to_ir_fan(
-                        requested_percent);
-
-                Key = 3;
-
-                const uint8_t matter_fan_mode =
-                    app_driver_ir_fan_to_matter(
-                        Fan,
-                        true);
-
-                ESP_LOGI(
-                    TAG,
-                    "Fan percentage: requested=%u%% -> "
-                    "Fan=%d FanMode=%u (keep Percent=%u%%)",
-                    static_cast<unsigned>(requested_percent),
-                    Fan,
-                    static_cast<unsigned>(matter_fan_mode),
-                    static_cast<unsigned>(requested_percent));
-
-                /*
-                 * Preserve the controller's percent so Home's continuous
-                 * slider tracks the drag; IR still uses Low/Med/High bands.
-                 */
-                app_matter_schedule_whole_device_state(
-                    PowerOn,
-                    Mode,
-                    Fan,
-                    requested_percent);
-            }
-        }
-    }
     else if (endpoint_id == temp_light_endpoint_id) {
         if (cluster_id == OnOff::Id &&
             attribute_id == OnOff::Attributes::OnOff::Id) {
@@ -2887,17 +2413,11 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      * Force a deterministic whole-device startup state:
      *   Room AC OnOff         = Off
      *   Thermostat SystemMode = Off
-     *   Fan OnOff             = Off
-     *   FanMode               = Off
-     *   PercentSetting        = 25% (retained Low default; not 0%)
-     *   PercentCurrent        = 0%
-     *
-     * Keep the last/default IR fan level at Low for the next power-on
-     * or non-zero fan-speed command (FanMode High / 25%).
+     *   IR fan                = Auto (not exposed over Matter)
      */
     PowerOn = false;
     Mode = 1;
-    Fan = 1;
+    Fan = 0;
 
     /*
      * Also request a physical AC Off command. The worker serializes this
@@ -2957,21 +2477,12 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
             Thermostat::Attributes::SystemMode::Id,
             &system_mode_val));
 
-    /*
-     * Publish Fan Off with retained PercentSetting 25% (not 0%). Home's
-     * initial subscription then already has a non-zero slider setpoint.
-     */
-    s_retained_fan_percent = 25;
-    app_matter_update_fan_endpoint_state_now(
-        static_cast<uint8_t>(FanControl::FanModeEnum::kOff),
-        25);
-
     s_matter_syncing_from_local = false;
 
     ESP_LOGI(
         TAG,
         "Initial whole-device state forced to Off "
-        "(default fan on next power-on: Low/25%%)");
+        "(IR Fan=Auto; no Matter fan endpoint)");
 
     return first_error;
 }

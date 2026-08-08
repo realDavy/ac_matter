@@ -50,7 +50,6 @@
 
 static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
-uint16_t fan_endpoint_id = 0;
 uint16_t humidity_sensor_endpoint_id = 0;
 uint16_t temp_light_endpoint_id = 0;
 
@@ -849,82 +848,9 @@ extern "C" void app_main()
 	    thermostat_cluster, 100); // 1.00°C
 
 	/*
-	 * Sibling Fan endpoint (device type 0x002B) so Apple Home's composed AC
-	 * tile exposes the vertical fan-speed slider. Putting FanControl only on
-	 * the Room AC endpoint made that slider disappear (Home kept the light
-	 * control instead).
-	 *
-	 * OffHighAuto: IR Low/Med/High publish as FanMode=High + percent
-	 * (25/50/100). Power-on default: IR Low -> High / 25%.
-	 *
-	 * Apple Home often does not refresh the composed fan slider when the
-	 * device later reports a new PercentSetting (device→UI gap). Seed
-	 * PercentSetting at 25% even while Off so the initial subscription
-	 * already carries a non-zero setpoint, and keep that setpoint across
-	 * Off (only PercentCurrent / FanMode go to 0/Off).
-	 *
-	 * MultiSpeed mirrors the same 0..100 value for controllers that bind
-	 * the slider to SpeedSetting/SpeedCurrent.
-	 *
-	 * OnOff is added manually (fan::config_t has no on_off) and kept in
-	 * sync with FanMode.
+	 * No Matter Fan / FanControl endpoint: Apple Home's composed AC fan
+	 * slider is not exposed. IR fan speed is always Auto (see app_driver).
 	 */
-	fan::config_t fan_config = {};
-	fan_config.fan_control.fan_mode =
-	    static_cast<uint8_t>(FanControl::FanModeEnum::kOff);
-	fan_config.fan_control.fan_mode_sequence =
-	    static_cast<uint8_t>(
-	        FanControl::FanModeSequenceEnum::kOffHighAuto);
-	fan_config.fan_control.percent_setting = nullable<uint8_t>(25);
-	fan_config.fan_control.percent_current = 0;
-
-	endpoint_t *fan_endpoint = fan::create(
-	    node,
-	    &fan_config,
-	    ENDPOINT_FLAG_NONE,
-	    room_air_conditioner_handle);
-	ABORT_APP_ON_FAILURE(fan_endpoint != nullptr,
-	    ESP_LOGE(TAG, "Failed to create fan endpoint"));
-
-	fan_endpoint_id = endpoint::get_id(fan_endpoint);
-	ESP_LOGI(TAG, "Fan endpoint created with endpoint_id %d",
-	         fan_endpoint_id);
-
-	/*
-	 * Tree-compose Fan under Room AC (Descriptor PartsList) so controllers
-	 * that honor parent/child composition can bind the AC fan control to
-	 * this endpoint's FanControl cluster.
-	 */
-	ABORT_APP_ON_FAILURE(
-	    endpoint::set_parent_endpoint(fan_endpoint, endpoint) == ESP_OK,
-	    ESP_LOGE(TAG, "Failed to set Fan parent to Room AC"));
-
-	cluster_t *fan_cluster =
-	    cluster::get(fan_endpoint, FanControl::Id);
-	ABORT_APP_ON_FAILURE(
-	    fan_cluster != nullptr,
-	    ESP_LOGE(TAG, "Failed to get Fan Control cluster"));
-
-	cluster::fan_control::feature::fan_auto::add(fan_cluster);
-
-	cluster::fan_control::feature::multi_speed::config_t multispeed_config;
-	multispeed_config.speed_max = 100;
-	cluster::fan_control::feature::multi_speed::add(
-	    fan_cluster,
-	    &multispeed_config);
-
-	cluster::on_off::config_t fan_on_off_config;
-	fan_on_off_config.on_off = false;
-	cluster_t *fan_on_off_cluster = cluster::on_off::create(
-	    fan_endpoint,
-	    &fan_on_off_config,
-	    CLUSTER_FLAG_SERVER);
-	ABORT_APP_ON_FAILURE(
-	    fan_on_off_cluster != nullptr,
-	    ESP_LOGE(TAG, "Failed to create Fan OnOff cluster"));
-	ESP_LOGI(TAG,
-	         "Fan OnOff + MultiSpeed added on endpoint %d (parent=RAC)",
-	         fan_endpoint_id);
 
 	/*
 	 * Optional SHT30 ambient humidity endpoint.
