@@ -16,6 +16,7 @@
 | 红外收发 | RMT 驱动 TX/RX；编码/解码走 IRremoteESP8266 `IRac` |
 | 空调配对 | 单击进入学习；双击 Alt 遍历协议 |
 | Matter 配网 | 手机扫码加入 Home / HA（2.4 GHz Wi‑Fi） |
+| 设备身份 | Manufacturer=`aidaegis`；设备名=`AC Remote`；序列号随机生成并以 MAC 后四位结尾 |
 | SHT30（可选） | 真实室温写入 Thermostat `LocalTemperature`；湿度独立 Humidity Sensor 端点 |
 | WS2812（可选） | 按室温绿→橙呼吸闪烁；Matter On/Off 灯端点可开关 |
 | 状态 LED | GPIO8，表示配对/配网/待机等状态 |
@@ -148,6 +149,8 @@ idf.py -p <串口> erase-flash flash monitor
 | SHT30 SDA/SCL/ADDR | menuconfig → **SHT30 Temperature / Humidity Sensor** | 5 / 6 / 0x44 |
 | WS2812 DIN | menuconfig → **WS2812 Temperature Indicator** | GPIO7 |
 | 动态端点数 | `sdkconfig.defaults` → `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` | **4** |
+| Manufacturer / 设备名 | `main/CHIPProjectConfig.h`、`CMakeLists.txt` | `aidaegis` / `AC Remote` |
+| 序列号 | 运行时写入 chip-factory（`serial-num`） | 随机 8 位 + MAC 后 4 位 |
 
 依赖组件：`espressif/led_strip`（见 `main/idf_component.yml`），首次构建会从组件仓库拉取。
 
@@ -174,6 +177,16 @@ idf.py -p <串口> erase-flash flash monitor
 2. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件。  
 3. 扫描设备标签或文档中的 Matter 二维码（仓库内可参考 `img/matter_qr.png`、`img/manual_QR.png`）。  
 4. DIY 固件通常会提示“未认证设备”，按指引继续即可。
+
+配网成功后，控制器中可见的设备身份默认如下（定义见 `main/CHIPProjectConfig.h` / `main/app_main.cpp`）：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| Manufacturer（VendorName） | `aidaegis` | Matter Basic Information |
+| 设备名（ProductName / NodeLabel） | `AC Remote` | 手机里显示的名称；用户可在 App 中改名 |
+| SerialNumber | `RRRRRRRRMMMM` | 首次启动生成：8 位随机十六进制 + Wi‑Fi STA MAC 后 4 位；写入 `chip-factory` NVS 后固定 |
+
+串口日志会出现 `Generated SerialNumber: ...`（首次）或 `SerialNumber: ...`（后续启动）。若需重新生成序列号，需擦除 flash / 清除 factory 区后再烧录。
 
 ### 3. 双击 Alt 协议遍历
 
