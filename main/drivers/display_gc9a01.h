@@ -10,4 +10,3 @@ lv_disp_t *display_get_disp(void);
 void display_set_backlight(bool on);
 
 bool display_is_ready(void);
-)
