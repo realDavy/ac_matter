@@ -515,7 +515,6 @@ void app_driver_led_set_mode(led_display_mode_t mode)
 static std::unique_ptr<ir_ac::IrAcController> s_ac;
 static bool s_matter_syncing_from_local = false;
 static TaskHandle_t s_ir_worker_task_handle = nullptr;
-static TaskHandle_t s_factory_reset_task_handle = nullptr;
 static QueueHandle_t s_ir_command_queue = nullptr;
 
 static std::atomic_bool s_factory_reset_armed{false};
