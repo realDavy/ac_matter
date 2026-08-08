@@ -113,40 +113,66 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
+    /*
+     * Probe before lvgl_port_init(): that call starts an LVGL task even when
+     * the later draw-buffer allocation fails, permanently wasting RAM.
+     */
+    constexpr uint16_t k_min_lines = 10;
+    const size_t min_buf_bytes =
+        static_cast<size_t>(BOARD_LCD_H_RES) * k_min_lines * sizeof(uint16_t);
+    bool use_dma = true;
+    void *probe = heap_caps_malloc(min_buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (probe == nullptr) {
+        use_dma = false;
+        probe = heap_caps_malloc(min_buf_bytes, MALLOC_CAP_INTERNAL);
+    }
+    if (probe == nullptr) {
+        ESP_LOGE(TAG, "Not enough heap for LVGL buffer (need %u bytes)",
+                 static_cast<unsigned>(min_buf_bytes));
+        return ESP_ERR_NO_MEM;
+    }
+    heap_caps_free(probe);
+
     const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
     /*
-     * Matter + BLE + Wi-Fi leave little internal DMA RAM. Prefer a single
-     * smaller draw buffer so GC9A01/LVGL can still come up for pairing QR.
-     * Fall back to an even smaller buffer if the first allocation fails.
+     * Prefer a single smaller draw buffer. Fall back to fewer lines and to
+     * non-DMA memory if internal DMA RAM is exhausted.
      */
     static const uint16_t k_buf_lines[] = {20, 10};
-    for (uint16_t lines : k_buf_lines) {
-        lvgl_port_display_cfg_t disp_cfg = {};
-        disp_cfg.io_handle = s_io;
-        disp_cfg.panel_handle = s_panel;
-        disp_cfg.buffer_size = BOARD_LCD_H_RES * lines;
-        disp_cfg.double_buffer = false;
-        disp_cfg.hres = BOARD_LCD_H_RES;
-        disp_cfg.vres = BOARD_LCD_V_RES;
-        disp_cfg.monochrome = false;
-        disp_cfg.rotation.swap_xy = false;
-        disp_cfg.rotation.mirror_x = false;
-        disp_cfg.rotation.mirror_y = false;
-        disp_cfg.flags.buff_dma = true;
+    const bool dma_opts[] = {use_dma, false};
+    for (bool dma : dma_opts) {
+        for (uint16_t lines : k_buf_lines) {
+            lvgl_port_display_cfg_t disp_cfg = {};
+            disp_cfg.io_handle = s_io;
+            disp_cfg.panel_handle = s_panel;
+            disp_cfg.buffer_size = BOARD_LCD_H_RES * lines;
+            disp_cfg.double_buffer = false;
+            disp_cfg.hres = BOARD_LCD_H_RES;
+            disp_cfg.vres = BOARD_LCD_V_RES;
+            disp_cfg.monochrome = false;
+            disp_cfg.rotation.swap_xy = false;
+            disp_cfg.rotation.mirror_x = false;
+            disp_cfg.rotation.mirror_y = false;
+            disp_cfg.flags.buff_dma = dma;
 
-        s_disp = lvgl_port_add_disp(&disp_cfg);
+            s_disp = lvgl_port_add_disp(&disp_cfg);
+            if (s_disp != nullptr) {
+                ESP_LOGI(TAG, "LVGL display buffer: %u lines, dma=%d", lines,
+                         dma ? 1 : 0);
+                break;
+            }
+            ESP_LOGW(TAG,
+                     "lvgl_port_add_disp failed with %u-line dma=%d; retrying",
+                     lines, dma ? 1 : 0);
+        }
         if (s_disp != nullptr) {
-            ESP_LOGI(TAG, "LVGL display buffer: %u lines, single", lines);
             break;
         }
-        ESP_LOGW(TAG, "lvgl_port_add_disp failed with %u-line buffer; retrying",
-                 lines);
     }
     if (s_disp == nullptr) {
         ESP_LOGE(TAG, "lvgl_port_add_disp failed");
-        /* Drop the LVGL task started by lvgl_port_init(); otherwise it keeps RAM. */
         (void)lvgl_port_deinit();
         return ESP_FAIL;
     }
