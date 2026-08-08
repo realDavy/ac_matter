@@ -191,6 +191,19 @@ idf.py -p <串口> erase-flash flash monitor
 
 ---
 
+## 用户说明书（PDF）
+
+面向最终用户的操作说明（配网、红外学习、屏上操作、按键与常见问题）：
+
+- [`docs/aidaegis_ac_remote_user_manual.pdf`](docs/aidaegis_ac_remote_user_manual.pdf)
+
+重新生成：
+
+```bash
+pip install fpdf2 fonttools   # 系统需安装 fonts-wqy-microhei
+python3 scripts/gen_user_manual_pdf.py
+```
+
 ## 使用说明
 
 ### 1. Matter 配网（手机 / 屏上扫码）

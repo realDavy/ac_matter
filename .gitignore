@@ -4,23 +4,19 @@ build-*/
 *.elf
 *.map
 *.hex
-
 # ESP-IDF generated config
 sdkconfig
 sdkconfig.old
 sdkconfig.ci
 sdkconfig.debug
 sdkconfig.release
-
 # ESP-IDF Component Manager generated files
 managed_components/
-
 # Optional:
 # For an application project, you may choose to commit dependencies.lock
 # for reproducible builds. During early development, ignoring it avoids
 # stale copied lock files causing confusion.
 dependencies.lock
-
 # CMake / Ninja generated files
 CMakeCache.txt
 CMakeFiles/
@@ -28,7 +24,6 @@ cmake_install.cmake
 compile_commands.json
 .ninja_deps
 .ninja_log
-
 # Python cache
 __pycache__/
 *.py[cod]
@@ -36,7 +31,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
 # Editor / IDE
 .vscode/
 .idea/
@@ -44,22 +38,19 @@ __pycache__/
 *.swo
 *~
 .DS_Store
-
 # Logs
 *.log
-
 # Local environment files
 .env
 .env.*
 venv/
 .venv/
-
 # ESP-IDF local artifacts
 *.flash_args
 flasher_args.json
 bootloader-flash_args
 partition-table-flash_args
-
 # Temporary files
 tmp/
 temp/
+docs/fonts/
