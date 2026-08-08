@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <cmath>
+#include <climits>
 #include <atomic>
 
 #include <esp_log.h>
@@ -807,6 +808,7 @@ static esp_err_t app_matter_update_display_temperature(
 
     local_temp.val.i16 = temp_x100;
 
+    const bool previous_sync_state = s_matter_syncing_from_local;
     s_matter_syncing_from_local = true;
 
     esp_err_t err = attribute::report(
@@ -816,7 +818,7 @@ static esp_err_t app_matter_update_display_temperature(
         &local_temp
     );
 
-    s_matter_syncing_from_local = false;
+    s_matter_syncing_from_local = previous_sync_state;
 
     if (err != ESP_OK) {
         ESP_LOGE(
@@ -829,10 +831,28 @@ static esp_err_t app_matter_update_display_temperature(
     return err;
 }
 
+/*
+ * Last setpoint (0.01°C) successfully pushed to Matter. Used to skip
+ * no-op resyncs when the controller rewrites the same temperature.
+ */
+static int16_t s_last_synced_temp_x100 = INT16_MIN;
+/* Coalesce ScheduleLambda posts — CHIP aborts if its event queue fills. */
+static std::atomic<int16_t> s_pending_temp_x100{0};
+static std::atomic<bool> s_temp_report_scheduled{false};
+
 static esp_err_t app_matter_report_all_temperatures_now(
     int16_t temp_x100)
 {
     esp_err_t first_error = ESP_OK;
+
+    /*
+     * attribute::report() invokes the attribute callback. Without this
+     * guard, OccupiedCooling/Heating reports re-enter
+     * app_driver_attribute_update() and schedule more lambdas until the
+     * CHIP platform event queue overflows and the device aborts.
+     */
+    const bool previous_sync_state = s_matter_syncing_from_local;
+    s_matter_syncing_from_local = true;
 
     const uint32_t setpoint_attributes[] = {
         Thermostat::Attributes::
@@ -877,28 +897,54 @@ static esp_err_t app_matter_report_all_temperatures_now(
         }
     }
 
+    s_matter_syncing_from_local = previous_sync_state;
+
+    if (first_error == ESP_OK) {
+        s_last_synced_temp_x100 = temp_x100;
+    }
+
     return first_error;
 }
 
 static void app_matter_schedule_report_all_temperatures(
     int16_t temp_x100)
 {
-    chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [temp_x100]() {
-            esp_err_t err =
-                app_matter_report_all_temperatures_now(
-                    temp_x100);
+    s_pending_temp_x100.store(temp_x100, std::memory_order_relaxed);
 
-            if (err != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "Scheduled temperature synchronization "
-                    "failed: %s",
-                    esp_err_to_name(err)
-                );
-            }
+    bool expected = false;
+    if (!s_temp_report_scheduled.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        /* A sync is already queued; it will pick up s_pending_temp_x100. */
+        return;
+    }
+
+    CHIP_ERROR err = chip::DeviceLayer::SystemLayer().ScheduleLambda([]() {
+        const int16_t temp_x100 =
+            s_pending_temp_x100.load(std::memory_order_relaxed);
+        s_temp_report_scheduled.store(false, std::memory_order_release);
+
+        esp_err_t report_err =
+            app_matter_report_all_temperatures_now(temp_x100);
+        if (report_err != ESP_OK) {
+            ESP_LOGE(TAG,
+                     "Scheduled temperature synchronization failed: %s",
+                     esp_err_to_name(report_err));
         }
-    );
+
+        /* One follow-up if the setpoint changed while we were reporting. */
+        const int16_t latest =
+            s_pending_temp_x100.load(std::memory_order_relaxed);
+        if (latest != temp_x100) {
+            app_matter_schedule_report_all_temperatures(latest);
+        }
+    });
+
+    if (err != CHIP_NO_ERROR) {
+        s_temp_report_scheduled.store(false, std::memory_order_release);
+        ESP_LOGW(TAG,
+                 "ScheduleLambda for temperature sync failed: %" CHIP_ERROR_FORMAT,
+                 err.Format());
+    }
 }
 
 
@@ -2399,10 +2445,14 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 
 			    /*
 			     * After the current write completes, synchronize cooling
-			     * and heating setpoints. LocalTemperature is only mirrored
-			     * from the setpoint when no ambient sensor is present.
+			     * and heating setpoints (and LocalTemperature when no SHT30).
+			     * Skip when Matter already has this setpoint — controllers
+			     * often rewrite the same value and used to flood the CHIP
+			     * event queue via report→callback→reschedule loops.
 			     */
-			    app_matter_schedule_report_all_temperatures(rounded_temp);
+			    if (rounded_temp != s_last_synced_temp_x100) {
+			        app_matter_schedule_report_all_temperatures(rounded_temp);
+			    }
 
             }
             
