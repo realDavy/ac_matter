@@ -35,8 +35,11 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 # Enable OTA Requestor
 CONFIG_ENABLE_OTA_REQUESTOR=y
 
-# Matter project config (Manufacturer / VendorName = aidaegis)
+# Matter project config (Manufacturer / ProductName)
 CONFIG_CHIP_PROJECT_CONFIG="main/CHIPProjectConfig.h"
+
+# Disable hardcoded test serial; app generates one (random + MAC suffix)
+CONFIG_USE_TEST_SERIAL_NUMBER=""
 
 # Enable HKDF in mbedtls
 CONFIG_MBEDTLS_HKDF_C=y

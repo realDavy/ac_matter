@@ -8,7 +8,11 @@
 
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_mac.h>
+#include <esp_random.h>
 #include <nvs_flash.h>
+#include <cstdio>
+#include <cstring>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
@@ -20,6 +24,7 @@
 #include <atomic>
 
 #include <platform/CHIPDeviceLayer.h>
+#include <platform/ESP32/ESP32Config.h>
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
 
@@ -41,6 +46,99 @@ using namespace chip::app::Clusters;
 
 constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
+
+static constexpr const char *k_device_name = "Air AC Remote";
+static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
+
+/**
+ * Ensure a persistent Matter SerialNumber exists.
+ * Format: 8 random hex digits + last 4 hex digits of the Wi-Fi STA MAC.
+ * Example: A1B2C3D4E5F6 where E5F6 comes from MAC bytes 4 and 5.
+ */
+static void app_ensure_serial_number()
+{
+    using chip::DeviceLayer::Internal::ESP32Config;
+
+    char serial[k_serial_buf_size] = {};
+    size_t serial_len = 0;
+
+    CHIP_ERROR err = ESP32Config::ReadConfigValueStr(
+        ESP32Config::kConfigKey_SerialNum, serial, sizeof(serial), serial_len);
+
+    if (err == CHIP_NO_ERROR && serial_len > 0) {
+        ESP_LOGI(TAG, "SerialNumber: %s", serial);
+        return;
+    }
+
+    uint8_t mac[6] = {};
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (mac_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read MAC for SerialNumber, err=%d", mac_err);
+        return;
+    }
+
+    uint8_t rnd[4] = {};
+    esp_fill_random(rnd, sizeof(rnd));
+
+    std::snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X",
+                  rnd[0], rnd[1], rnd[2], rnd[3], mac[4], mac[5]);
+
+    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_SerialNum, serial);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to store SerialNumber, err=%" CHIP_ERROR_FORMAT, err.Format());
+        return;
+    }
+
+    ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
+}
+
+/** Set default NodeLabel so controllers show "Air AC Remote" before the user renames it. */
+static void app_set_default_node_label(node_t *node)
+{
+    if (node == nullptr) {
+        return;
+    }
+
+    endpoint_t *root = endpoint::get(node, 0);
+    if (root == nullptr) {
+        ESP_LOGE(TAG, "Root endpoint missing; cannot set NodeLabel");
+        return;
+    }
+
+    cluster_t *basic = cluster::get(root, BasicInformation::Id);
+    if (basic == nullptr) {
+        ESP_LOGE(TAG, "Basic Information cluster missing; cannot set NodeLabel");
+        return;
+    }
+
+    attribute_t *node_label =
+        attribute::get(basic, BasicInformation::Attributes::NodeLabel::Id);
+    if (node_label == nullptr) {
+        ESP_LOGE(TAG, "NodeLabel attribute missing");
+        return;
+    }
+
+    esp_matter_attr_val_t current = {};
+    if (attribute::get_val(node_label, &current) == ESP_OK &&
+        current.val.a.s > 0) {
+        ESP_LOGI(TAG, "NodeLabel already set; leaving unchanged");
+        return;
+    }
+
+    char name[32];
+    std::strncpy(name, k_device_name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+
+    esp_matter_attr_val_t val =
+        esp_matter_char_str(name, static_cast<uint16_t>(std::strlen(name)));
+    esp_err_t set_err = attribute::set_val(node_label, &val);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set NodeLabel, err=%d", set_err);
+        return;
+    }
+
+    ESP_LOGI(TAG, "NodeLabel set to \"%s\"", name);
+}
 
 static uint32_t app_count_active_subscriptions_locked()
 {
@@ -276,6 +374,9 @@ extern "C" void app_main()
     /* Initialize the ESP NVS layer */
     nvs_flash_init();
 
+    /* Persist SerialNumber before Matter reads Basic Information */
+    app_ensure_serial_number();
+
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
     app_driver_handle_t button_handle = app_driver_button_init();
@@ -286,6 +387,7 @@ extern "C" void app_main()
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
+    app_set_default_node_label(node);
     room_air_conditioner::config_t room_air_conditioner_config;
     room_air_conditioner_config.on_off.on_off = DEFAULT_POWER;
 	auto &thermostat = room_air_conditioner_config.thermostat;

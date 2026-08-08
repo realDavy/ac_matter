@@ -60,5 +60,7 @@ idf_build_set_property(C_COMPILE_OPTIONS "-Os" APPEND)
 # flags that depend on -Wformat
 idf_build_set_property(COMPILE_OPTIONS "-Wno-format-nonliteral;-Wno-format-security" APPEND)
 
-# Matter Basic Information VendorName (shown as Manufacturer in phone apps)
+# Matter Basic Information identity (Manufacturer / ProductName)
 idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME=\"aidaegis\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME=\"Air AC Remote\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_NAME=\"Air AC Remote\"" APPEND)
