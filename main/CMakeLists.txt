@@ -3,3 +3,7 @@ idf_component_register(SRC_DIRS          "." "drivers" "ui"
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
+
+# ricmoo/QRCode uses Apple #pragma mark; silence under -Werror.
+set_source_files_properties(ui/qrcode.c PROPERTIES COMPILE_FLAGS
+    "-Wno-error=unknown-pragmas -Wno-type-limits")

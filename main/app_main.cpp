@@ -713,8 +713,7 @@ extern "C" void app_main()
 	err = ws2812_temp_light_init();
 	if (err == ESP_OK) {
 	    ws2812_temp_light_set_enabled(temp_light_config.on_off.on_off);
-	    ws2812_temp_light_set_brightness(
-	        temp_light_config.level_control.current_level);
+	    ws2812_temp_light_set_brightness(180);
 	    ws2812_temp_light_set_mode(WS2812_MODE_TEMP_BREATH);
 	} else {
 	    ESP_LOGW(TAG, "WS2812 indicator not available (%s)", esp_err_to_name(err));
