@@ -95,6 +95,17 @@ app_matter_state_t app_get_matter_state_locked();
 
 void app_driver_set_subscription_active(bool active);
 
+/**
+ * When true, Thermostat LocalTemperature is driven by the ambient SHT30
+ * sensor and must not be overwritten with the AC setpoint.
+ */
+void app_driver_set_ambient_sensor_active(bool active);
+
+bool app_driver_ambient_sensor_active(void);
+
+/** Apply Matter On/Off for the WS2812 temperature indicator light. */
+esp_err_t app_driver_temp_light_set_power(esp_matter_attr_val_t *val);
+
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
     {                                                                                   \

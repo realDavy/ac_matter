@@ -1,187 +1,299 @@
-# Matter Protocol Air Conditioner Controller for Any Brand (ESP32 + BC7215 Project)
+# Matter 空调红外控制器（ESP32-C3 + IRremoteESP8266）
 
-## Key Features
+用一块 ESP32-C3，把支持 [IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266) 协议的空调接入 **Apple Home / Google Home / Home Assistant**（Matter，本地控制，不依赖厂商云）。
 
-- Connect virtually any air conditioner—old or new, directly to Apple Home, Google Home, or Home Assistant
-- No app installation required
-- No account registration required
-- No touching the air conditioner's internal circuit required
+本固件使用普通 **红外发射管 + 红外接收头**，不再依赖 BC7215 学习模块。可选接入 **SHT30** 温湿度传感器与 **WS2812** 温感呼吸灯，用于显示真实室温与湿度。
 
-![](img/use-illustration_1280px.jpg)
+> **协议覆盖说明：** 只支持 IRremoteESP8266 已实现的空调协议，**不是**早期 BC7215 那种“万能学习”方案。若遥控协议不在库中，自动配对会失败；可用双击 Alt 遍历尝试库内候选协议。
 
-Matter is a new IoT protocol that is now built into iPhones and Android phones. This means that Matter-compatible devices can be operated directly in environments such as Apple Home without installing a dedicated app.
+---
 
-This device is an offline air conditioner controller. The air-conditioner control function itself does not require a network connection, so it does not depend on any third-party service and does not require account registration.
+## 功能一览
 
-If you already use Home Assistant, the sister project—the ESPHome version of this project ([https://github.com/timj-code/bc7215_ac_esphome](https://github.com/timj-code/bc7215_ac_esphome))—may be more suitable for you. Matter support for air conditioners is still at an early stage and provides relatively limited functionality, so it is not as comprehensive as Home Assistant.
+| 功能 | 说明 |
+|------|------|
+| Matter 空调控制 | 开关、制冷/制热、整度设定温度、风扇档位 |
+| 红外收发 | RMT 驱动 TX/RX；编码/解码走 IRremoteESP8266 `IRac` |
+| 空调配对 | 单击进入学习；双击 Alt 遍历协议 |
+| Matter 配网 | 手机扫码加入 Home / HA（2.4 GHz Wi‑Fi） |
+| SHT30（可选） | 真实室温写入 Thermostat `LocalTemperature`；湿度独立 Humidity Sensor 端点 |
+| WS2812（可选） | 按室温绿→橙呼吸闪烁；Matter On/Off 灯端点可开关 |
+| 状态 LED | GPIO8，表示配对/配网/待机等状态 |
+| 按键 | BOOT 键：单击配对、双击 Alt、长按恢复出厂 |
 
-Based on my experience during development, neither Apple Home nor Google Home is especially smooth enough when controlling devices such as air conditioners that require real-time feedback. There can sometimes be noticeable delays before control results appear on the phone, and establishing a connection can also take a relatively long time. **Overall, however, it is still a very cool way to add smart control to an air conditioner that has not yet been integrated into your smart home—or to give one to a friend who has an iPhone—because it is not restricted to particular air conditioner brands or models, requires no additional app, and requires no extra controller device for iPhone users.**
+Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4`）：
 
-## Limitations
+1. **Room Air Conditioner** — 开关 / 温控 / 风扇逻辑  
+2. **Fan** — 风扇档位（便于部分手机 UI 露出风速）  
+3. **Humidity Sensor** — 相对湿度（有 SHT30 时更新）  
+4. **On/Off Light** — WS2812 温感指示灯开关  
 
-Matter devices can be used without a dedicated app. This is an advantage, but it also has a downside: the user experience is largely outside the device manufacturer's control. For example, the interface and overall experience may differ significantly between Apple and Android platforms, especially for a complex device such as an air conditioner.
+---
 
-Matter is also still evolving, and its support for air conditioners remains limited. Air conditioner functions are mainly mapped to HVAC system modes. Many functions found on split-system air conditioners have no corresponding mapping in the protocol, or may be defined by the protocol but not yet supported by smartphone platforms.
+## 硬件与 BOM（画 PCB 用）
 
-The limitations I have found so far are listed below.
+### 推荐主控
 
-#### Protocol Limitations
+- **ESP32-C3 Super Mini** 或 **Seeed XIAO ESP32-C3**（固件默认按 C3 引脚）
+- Flash ≥ 4 MB（分区表按 4 MB 编写）
+- 仅支持 **2.4 GHz Wi‑Fi**（Matter over Wi‑Fi）
 
-| Item                   | Conventional Split-System Air Conditioner                                                                     | Matter Protocol                                                                                                                                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Temperature control    | A single target temperature                                                                                   | Separate cooling and heating target temperatures. In Auto mode in particular, a temperature range is set instead of a single target temperature.                                                                |
-| Temperature resolution | Usually 1°C. The air conditioner control library used by this device also supports integer temperatures only. | The device cannot specify the temperature adjustment step through the protocol. Apple and Google currently both use 0.5°C as the minimum adjustment step.                                                       |
-| Fan control            | Usually four levels: Auto, High, Medium, and Low                                                              | The fan section has its own power switch. The protocol supports both discrete fan levels and percentage-based control, but smartphone vendors currently appear to support only percentage-based fan adjustment. |
+### 完整 GPIO 分配（固件默认，可直接画板）
 
-Project implementation: only the most common Cooling and Heating modes are currently supported. Other modes are not yet supported. Fan settings from 1% to 33% are mapped to Low, 34% to 66% are mapped to Medium, and values above 66% are mapped to High. When the temperature is set to a value ending in 0.5°C, it is automatically rounded up to the next whole degree.
+| GPIO | 方向 | 功能 | PCB / 电气建议 |
+|------|------|------|----------------|
+| **3** | IN | 红外接收 OUT | 接 VS1838 / HX1838 等 38 kHz 解调器 OUT；模块 VCC→3V3，GND 共地 |
+| **4** | OUT | 红外发射驱动 | **禁止直驱大电流 IR LED**；经 NPN / MOSFET + 限流电阻驱动 940 nm LED |
+| **5** | I2C SDA | SHT30 SDA | 外挂 **4.7 kΩ → 3V3** 上拉（模块自带可省略） |
+| **6** | I2C SCL | SHT30 SCL | 同上 |
+| **7** | OUT | WS2812 DIN | 与灯珠共地；5 V 灯珠建议 3V3→5V 电平转换 |
+| **8** | OUT | 状态 LED（**低电平点亮**） | 经电阻接到 LED 阴极，阳极→3V3（或按板载 active-low 接法） |
+| **9** | IN | BOOT / 功能按键（低有效） | 按键到 GND；片内上拉，可再加 10 kΩ → 3V3 |
 
-#### Limitations Introduced by Application Platforms
+### 电源与保留脚
 
-I have currently tested only the four platforms below. If you can help test other Matter-compatible IoT platforms, such as Tuya, Xiaomi, or Aqara, and provide feedback, I would be very grateful. Please post your test results in an issue.
+| 网络 / 引脚 | 说明 |
+|-------------|------|
+| **3V3 / GND** | ESP32、SHT30、红外接收头、状态 LED |
+| **5V / GND**（可选） | 仅当 WS2812 用 5 V 供电；必须与 ESP **共地** |
+| SHT30 **ADDR** | 接 **GND** → 地址 `0x44`（固件默认）；接 VDD → `0x45`（menuconfig 打开 `CONFIG_SHT30_I2C_ADDR_VDD`） |
+| **GPIO18 / 19** | USB Serial-JTAG，外设勿占用 |
+| **GPIO11–17** | C3 内部 Flash，勿引出外设 |
 
-| Apple Home                                                                                                                         | Google Home                                                                             | Amazon Alexa                                                                                                                                               | Home Assistant As Matter Controller                                                                         |
-| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| The iPhone itself can act as a Matter controller, so no additional device is required.                                             | A Google Nest device is required in the home as the controller.                         | An Amazon Echo device is required in the home as the controller.                                                                                           | The Matter add-on must be installed.                                                                        |
-| Supports temperature and fan-speed settings, with fan speed shown only as a percentage.                                            | Supports temperature and fan-speed settings, with fan speed shown only as a percentage. | Exposes the air conditioner and fan as two separate devices. The air conditioner supports only on/off control and does not support temperature adjustment. | Supports temperature and fan-speed settings, with fan speed correctly shown as Auto, High, Medium, and Low. |
-| Updates to the device's current state are sometimes delayed.                                                                       | Device-state updates are noticeably delayed and may sometimes take one or two minutes.  |                                                                                                                                                            | No noticeable delay.                                                                                        |
-| When only the phone is used as the controller, the device can be used only while the phone is connected to the home Wi-Fi network. |                                                                                         |                                                                                                                                                            | Adding the device requires the Home Assistant app to be installed on the phone.                             |
+### 原理图示意
 
-* Delayed device-state updates do not affect commands sent from the phone to the air conditioner. Such commands usually take effect immediately. However, the phone also displays device information such as the current temperature and on/off state. If you look only at the phone without comparing it with the air conditioner's actual operation, the delay can sometimes be very confusing, especially in Google Home. ***(Maybe because I was using a 1st Gen Google Home for testing, it appeared on market earlier than Matter, so could be outdated.)***  For example, you may turn the air conditioner on and it will actually start, while the phone continues to display “OFF” for a long time. Similarly, after changing the temperature with the infrared remote control, it may take a long time before the phone reflects the change.
+```
+                    3V3
+                     │
+        ┌────────────┼────────────┬──────────────┐
+        │            │            │              │
+     SHT30        VS1838      状态LED         (可选上拉)
+     VCC          VCC         (anode)         4.7k×2
+     GND──GND     GND──GND    resistor         │
+     SDA──GPIO5               │               SDA/SCL
+     SCL──GPIO6               └─GPIO8 (sink)
+     ADDR──GND
 
-## Hardware Connections
+  ESP32-C3 ──GPIO4──► NPN/MOSFET ──► 940nm IR LED(s) + 限流电阻 ──► GND
+           ──GPIO3◄── VS1838 OUT
+           ──GPIO7──► WS2812 DIN   (WS2812 VCC=3V3或5V, GND共地)
+           ──GPIO9◄── BOOT 按键 ── GND
+```
 
-Online installation is currently provided only for ESP32-C3 modules. However, the project itself can be used with the entire ESP32 family by modifying the I/O definitions and recompiling. Hardware used with the online installer must follow the specified wiring. The firmware supports both ESP32-C3 XIAO and ESP32-C3 Super Mini (PRO) modules. Super Mini modules often experience Wi-Fi connection problems. The XIAO module provides better Wi-Fi performance when used with an external antenna, but because this project requires an LED as a status indicator and the XIAO module does not include one, an external LED must be connected.
+### 红外发射注意事项
 
-**ESP32-C3 XIAO wiring:**
+- GPIO 直驱 IR LED 射程很短，PCB 上请预留三极管/MOS 驱动与足够电流回路。  
+- 可并联多颗 940 nm LED 以覆盖房间尺度。  
+- 接收头朝向“人/遥控器方向”，发射管朝向空调。
 
-![](img/xiao-led-bc7215module-wiring.jpg)
+### 可选传感器与指示灯
 
-**ESP32-C3 Super Mini (PRO) wiring:**
+**SHT30**
 
-![](img/supermini-bc7215module-wiring.jpg)
+- 有传感器：每约 5 s 更新 Thermostat `LocalTemperature` 与湿度端点。  
+- 无传感器：空调红外/Matter 仍可用；`LocalTemperature` 回退为镜像设定温度。
 
-#### 3D-Printed Enclosure
+**WS2812 温感呼吸灯**（周期约 2.5 s）
 
-A STEP file for a 3D-printable enclosure is provided. If you have a 3D printer, you can print the enclosure to make the device look more like a finished product. [See the enclosure documentation here](docs/casing.md).
+| 室温 | 颜色 |
+|------|------|
+| ≤ 18 °C | 绿色 |
+| ~ 24 °C | 黄 / 琥珀 |
+| ≥ 30 °C | 橙色 |
 
-![](img/assembly.jpg)
+手机里会出现一盏 **On/Off 灯**，用于开关该指示灯（不影响空调控制）。
 
-## Firmware Installation
+---
 
-1. ### Web Install (Recommended)
+## 固件编译与烧录
 
-Online firmware installation is available for ESP32-C3 modules. Users do not need to install any software. After connecting the device to a computer through USB, the firmware can be installed directly from a web browser. Visit the online installation page at: [https://timj-code.github.io/bc7215_ac_matter/](https://timj-code.github.io/bc7215_ac_matter/), and follow the instructions on the page.
+### 环境
 
-2. ### Clone and Compile (Custom Setup)
-   
-   This method allows you to use any ESP32 variant and customize the GPIO pins to your preference. You will just need to modify the hardware configurations in the `main/app_driver.cpp`.
-   
-   At the top section of the file:
-   
-   ```yaml
-   static constexpr uart_port_t BC7215_UART_NUM = UART_NUM_1;
-   static constexpr gpio_num_t BC7215_RX_PIN = GPIO_NUM_3;
-   static constexpr gpio_num_t BC7215_TX_PIN = GPIO_NUM_4;
-   static constexpr gpio_num_t BC7215_BUSY_PIN = GPIO_NUM_5;
-   static constexpr gpio_num_t BC7215_MOD_PIN = GPIO_NUM_6;
-   
-   static constexpr gpio_num_t SUPER_MINI_LED_GPIO = GPIO_NUM_8;
-   
-   ```
-   
-   ****Important Note:** Do not select a UART port that conflicts with the download/programming port. Also, avoid using GPIO pins that are already assigned to other hardware components (such as LCDs, or buttons).
-   
-   #### Step 1: Clone the project
-   
-   Because this project relies on git submodules (the AC control library and examples from [GitHub - bitcode-tech/bc7215_ac_lib · GitHub](https://github.com/bitcode-tech/bc7215_ac_lib)), **do not download it as a ZIP file**. You must use the `git clone --recursive` command to fetch all required dependencies:
-   
-   `git clone --recursive https://github.com/timj-code/bc7215_ac_matter.git`
-   
-   #### Step 2: Change chip target
-   
-   `idf.py set-target esp32`
-   
-   In Espressive Matter SDK environment, set the target according to your application
-   
-   #### Step 3: Change Maximum Endpoint Number
-   
-   When you just changed the target chipset, the Max Endpoint is set to default value 2, we need to change it to 3. 
-   
-   `idf.py menuconfig`
-   
-   In he menu, search for MAX_DYNAMIC_ENDPOINT , and change it to 3
-   
-   #### Step 4: Compile & Install
-   
-   Run the following command in the project root directory:
-   
-   `idf.py clean`
-   
-   `idf.py build`
-   
-   `idf.py -p your/location/of/esp32/serial/port erase-flash flash monitor`
+- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/)（与所用 [ESP-Matter](https://github.com/espressif/esp-matter) 版本匹配）
+- 已安装并配置好 `ESP_MATTER_PATH`、`IDF_PATH`
+- 目标芯片：`esp32c3`
 
-## Setup and Usage
+### 获取源码
 
-#### Setup
+本仓库通过 submodule 引用 IRremoteESP8266，请递归克隆：
 
-This device requires two setup steps:
+```bash
+git clone --recursive https://github.com/realDavy/bc7215_ac_matter.git
+cd bc7215_ac_matter
+```
 
-- Pair the device with the air conditioner
-- Connect the device to a phone or smart-home platform
+若已克隆但未拉子模块：
 
-The two steps can be completed in either order, but pairing the air conditioner first is recommended so that the device can be used immediately after it is connected to the phone.
+```bash
+git submodule update --init --recursive
+```
 
-There are two openings on the rear cover of the device: one for the button and one for the LED.
+### 编译烧录
 
-1. **Pairing with the air conditioner**  After the device is powered on for the first time, the LED should remain steadily lit, indicating that the device has not yet been configured. First, set the air conditioner's infrared remote control to 25°C in Cooling mode. Press the button on the device once. The LED will begin flashing rapidly, indicating that pairing mode is active. Point the air conditioner remote control at the device and press the **Fan Speed** button. Under normal conditions, pairing will then be completed. The LED will change to two short flashes per second, indicating that connection to the phone has not yet been configured.
+```bash
+idf.py set-target esp32c3
+idf.py menuconfig    # 确认 MAX_DYNAMIC_ENDPOINT_COUNT=4；可改 SHT30/WS2812 引脚
+idf.py build
+idf.py -p <串口> erase-flash flash monitor
+```
 
-2. **Connecting to a phone**  Since ESP32 only supports 2.4GHz, it's better to connect your phone to 2.4G Wifi too to prevent potential problems. Open the Apple Home or Google Home app. In Apple Home, select **Add Accessory**. In Google Home, select the option to add a device. A QR-code scanning screen will appear. Scan the Matter commissioning QR code. *(When I'm going to give it to my friends, I will print this QR code and attach it to the enclosure so that the connection setup will be easy. I will also attach another QR code linking to this page as a user manual.)* Follow the on-screen instructions to complete the setup. During the connection process, including reconnection after the device has been powered off, the LED will flash slowly to indicate that a connection is being in negotiation. 
-   
-   Matter commissioning QR code:
-   
-   ![](img/matter_qr.png)
-   
-   QR code linking to the user manual (this document):
-   
-   ![](img/manual_QR.png)
+首次建议 `erase-flash`，避免旧分区/配网数据干扰。
 
-Connecting a Matter device is usually relatively slow and often takes tens of seconds. Even after the device has completed the connection process, the phone may take a while to show the device as online. This appears to be caused by the design of the smart-home platform, and there seems to be little that a device developer can do about it.
+### 可配置项
 
-During phone setup, you will see a warning stating that this is an **uncertified device**. This is because commercial manufacturers must complete certification before receiving a unique device certification code. As this is a DIY device, it cannot obtain such certification, so the warning is displayed. It does not affect functionality.
+| 项 | 位置 | 默认 |
+|----|------|------|
+| IR TX / RX | `main/app_driver.cpp` 顶部 `IR_TX_PIN` / `IR_RX_PIN` | GPIO4 / GPIO3 |
+| 状态 LED | 同文件 `SUPER_MINI_LED_GPIO` | GPIO8（active-low） |
+| SHT30 SDA/SCL/ADDR | menuconfig → **SHT30 Temperature / Humidity Sensor** | 5 / 6 / 0x44 |
+| WS2812 DIN | menuconfig → **WS2812 Temperature Indicator** | GPIO7 |
+| 动态端点数 | `sdkconfig.defaults` → `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` | **4** |
 
-After the connection is successful, the LED will change to one short flash every three seconds, indicating that the device is ready.
+依赖组件：`espressif/led_strip`（见 `main/idf_component.yml`），首次构建会从组件仓库拉取。
 
-After the device has been successfully added to the phone, interfaces for the thermostat and fan controller should appear. Because of the limitations described above, only Cooling and Heating modes are currently supported. If the temperature is set to a value ending in 0.5°C, it will be rounded up because the device does not support 0.5°C settings. Similarly, if fan speed is displayed as a continuously adjustable percentage, it will be mapped to the nearest of the three supported levels: High, Medium, or Low.
+### 分区与版本
 
-In addition to controlling the air conditioner from a phone, the device can synchronize commands sent from the infrared remote control back to the phone. This allows the user to see remote-control operations reflected on the phone. The device should therefore be placed near the air conditioner so that it can also receive the infrared signal whenever the user operates the air conditioner with the remote control. Otherwise, those operations cannot be synchronized.
+- 自定义分区：`partitions.csv`（含 OTA 双区、`fctry` 等）
+- 工程版本号：`CMakeLists.txt` 中 `PROJECT_VER`（当前如 `2.0-irremote`）
 
-#### Adding Another Controller
+---
 
-A Matter device can be added to multiple controllers. For example, it can be controlled by both Apple Home and Google Home. It cannot be added directly to another controller. Addition must first be authorised from a phone that is already connected. In Apple Home, this option is shown as **Turn On Pairing Mode**. In Google Home, it is called **Link apps and services**. Selecting it provides a numeric setup code that can be used to add the device on a second platform. In my experience, scanning a QR code usually does not work when adding another controller; the setup-code option must be selected manually.
+## 使用说明
 
-#### Double-Click to Test Special Protocols
+### 1. 与空调红外配对
 
-According to the documentation for the AC driver library, a few rare protocols cannot be automatically matched through the standard pairing process. If you have confirmed that your pairing procedure is correct but pairing still fails—or if the status shows paired but the AC does not respond correctly—you can try double-clicking the button to cycle through and test the built-in special AC protocols one by one. You can enter the special protocol test mode by double-clicking the button, regardless of whether the device is currently paired or unpaired.
+1. 上电。状态灯**常亮** ≈ 出厂 / 未配好。  
+2. **单击** BOOT 键 → 灯**快闪** = 进入红外学习。  
+3. 用原装遥控器对准本机接收头，按任意键（建议：制冷 / 25 °C / 风速）。  
+4. 协议可识别则配对完成，灯模式变化。  
+5. 失败则协议可能不受支持，或改用下方 Alt 遍历。
 
-Once in test mode, each double-click will switch to the next built-in special protocol and simultaneously emit a test signal. Make sure to point the IR LED toward your air conditioner. If your AC responds to a protocol (typically with a beep), that protocol is likely the right one for your unit. You can then verify it by adjusting the temperature on your phone. Controlling by phone will let the device exit this test mode.
+### 2. Matter 配网（手机）
 
-During testing, the LED will remain off and only flash when switching protocols; the number of flashes indicates the protocol index number. Once all built-in protocols (currently fewer than 10) have been cycled through, the LED status will return to the "AC Not Paired" state.
+1. 手机与设备使用 **2.4 GHz** Wi‑Fi。  
+2. 打开 Apple Home / Google Home / HA Companion，添加 Matter 配件。  
+3. 扫描设备标签或文档中的 Matter 二维码（仓库内可参考 `img/matter_qr.png`、`img/manual_QR.png`）。  
+4. DIY 固件通常会提示“未认证设备”，按指引继续即可。
 
-#### Resetting the Device
+### 3. 双击 Alt 协议遍历
 
-The device can be paired with a different air conditioner at any time without reconfiguring the phone connection. Air conditioner pairing is simple and almost immediate.
+自动解码失败时：
 
-To start completely from the beginning, press and hold the device button for five seconds. Release it when the LED begins flashing rapidly. This deletes all network configuration and air conditioner pairing information.
+1. **双击**按键，按列表依次发送“制冷 / 25 °C”测试帧。  
+2. 空调有反应（如滴一声）后，在手机上发任意 Matter 命令（如改温度）以**确认当前协议**。  
+3. 灯闪次数对应协议序号；试完一轮仍无结果则回到未配对。
 
-## LED Status Indicators
+支持协议列表见：[IRremoteESP8266 SupportedProtocols](https://github.com/crankyoldgit/IRremoteESP8266/blob/master/SupportedProtocols.md)（空调 / `IRac::isProtocolSupported`）。
 
-| LED Behaviour                       | Meaning                                                                             |
-| ----------------------------------- | ----------------------------------------------------------------------------------- |
-| Steadily on                         | Factory state; the device has not yet been configured.                              |
-| Steadily off                        | Not powered or button double clicked (see above)                                    |
-| Rapid flashing                      | Waiting to receive an infrared signal for air conditioner pairing.                  |
-| Slow flashing                       | Establishing a network connection.                                                  |
-| One short flash per second          | The network is configured, but the air conditioner has not yet been paired.         |
-| Two short flashes per second        | The air conditioner is paired and the device is waiting to be connected to a phone. |
-| One short flash every three seconds | Pairing and connection are complete; the device is in standby mode.                 |
+### 4. 恢复出厂
+
+**长按**按键约 **5 秒**（灯快闪）后松开：清除红外配对与 Matter 配网数据。
+
+---
+
+## 状态 LED 含义（GPIO8）
+
+| 灯效 | 含义 |
+|------|------|
+| 常亮 | 出厂 / 尚未配置完成 |
+| 常灭 | 未上电，或 Alt 遍历进行中 |
+| 快闪 | 等待红外学习信号 |
+| 慢闪 | 正在建立网络连接 |
+| 每秒闪 1 次 | 网络已配好，空调尚未红外配对 |
+| 每秒闪 2 次 | 空调已配对，等待手机 Matter 连接 / 订阅 |
+| 约每 3 秒闪一下 | 配对与连接完成，待机 |
+
+> 状态 LED 与 WS2812 温感灯相互独立：前者表示系统/配对状态，后者表示室温且可被 Matter 开关。
+
+---
+
+## 软件架构
+
+```
+main/
+  app_main.cpp          Matter 节点、端点创建、SHT30/WS2812 启动
+  app_driver.cpp        红外配对/控制、状态 LED、按键、属性写回
+  drivers/sht30.*       SHT30 I2C 单次测量（CRC），FreeRTOS 轮询任务
+  drivers/ws2812_temp_light.*
+                        WS2812 呼吸灯（led_strip + RMT）
+components/ir_ac/       RMT 收发 + IRac 封装
+deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB，时序由软件生成再经 RMT 发出）
+```
+
+**RMT 占用（ESP32-C3）：** 红外 TX 1 路 + 红外 RX 1 路 + WS2812 TX 1 路，资源足够。
+
+---
+
+## Matter 能力与限制
+
+**已支持（与常见手机 UI 对齐）：**
+
+- 开关、制冷 / 制热  
+- 目标温度：按 **整度 °C** 对齐（0.5 °C 类输入会四舍五入到整度）  
+- 风扇：低 / 中 / 高（由百分比映射）  
+- 有 SHT30：当前室温 + 湿度  
+- WS2812：独立 On/Off  
+
+**限制：**
+
+- 无独立“自动 / 除湿 / 仅通风”等完整官方声明时，部分控制器仍可能下发；固件在收到时会尽量映射到红外模式。  
+- 半度温控、细粒度扫风摆叶等 Matter HVAC 表达仍弱于原装遥控。  
+- 非 IRremoteESP8266 协议的空调无法通过本固件配对。
+
+---
+
+## 外壳与放置
+
+仓库提供 3D 外壳与装配说明：
+
+- 模型：`3d/*.step`（Super Mini / XIAO 底壳等）  
+- 说明：[`docs/casing.md`](docs/casing.md)  
+- 配图：`img/`
+
+放置原则：靠近空调；发射管朝空调；接收头朝向使用遥控的一侧。
+
+---
+
+## 故障排查
+
+| 现象 | 排查 |
+|------|------|
+| 编译缺 `IRremoteESP8266` | `git submodule update --init --recursive` |
+| 端点创建失败 / 湿度或灯不出现 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4` 后重新 `fullclean` + 编译 |
+| 红外配对无反应 | 检查 GPIO3 接收头接线与朝向；确认遥控对准接收头 |
+| 有配对但空调不动 | 检查 GPIO4 驱动电路与发射管方向/电流；试 Alt 遍历换协议 |
+| 日志 `SHT30 not available` | 检查 SDA/SCL/ADDR/供电与上拉；无传感器属正常降级 |
+| WS2812 不亮 | 查 GPIO7、共地、5 V 电平时序；Matter 灯端点是否被关掉 |
+| Matter 搜不到 | 必须 2.4 GHz；尝试恢复出厂后重新配网；看串口日志 |
+
+串口监视：
+
+```bash
+idf.py -p <串口> monitor
+```
+
+关注日志标签：`app_main`、`app_driver`、`ir_ac` / `rmt_ir`、`sht30`、`ws2812_temp`。
+
+---
+
+## 目录结构（简）
+
+```
+├── main/                 应用与传感器/指示灯驱动
+├── components/ir_ac/     红外 RMT + IRac
+├── deps/IRremoteESP8266/ 子模块
+├── docs/                 外壳说明、Web 安装页等
+├── 3d/                   外壳 STEP
+├── img/                  装配与 Matter 二维码等图片
+├── partitions.csv
+├── sdkconfig.defaults
+└── README.md
+```
+
+---
+
+## 许可证
+
+- 本仓库工程代码：见根目录 [`LICENSE`](LICENSE)（MIT）。  
+- [IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266)：LGPL-2.1，请遵守其条款。  
+- `espressif/led_strip` 等组件：遵循各自 SPDX / 组件许可证。
