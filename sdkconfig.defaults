@@ -18,9 +18,10 @@ CONFIG_PARTITION_TABLE_OFFSET=0xC000
 # Enable chip shell
 CONFIG_ENABLE_CHIP_SHELL=y
 
-# This example uses 4 dynamic endpoints:
-# Room AC + Fan + Humidity Sensor + WS2812 Dimmable Light
-CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4
+# Dynamic endpoints: Root + Room AC + Fan + Humidity + WS2812 Dimmable Light.
+# Must be > app endpoints alone — root/node also consumes a slot; 4 is too low
+# and causes boot-loop: "Failed to create dimmable light endpoint" + abort().
+CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=8
 
 #enable lwIP route hooks
 CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y

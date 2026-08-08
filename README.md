@@ -23,7 +23,7 @@
 | 状态 LED | GPIO11，表示配对/配网/待机等状态 |
 | BOOT 键 | **双击** Alt 遍历协议；**长按 ~5s** 恢复出厂 |
 
-Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4`）：
+Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`；Root 也占槽位，设为 4 会在创建灯光端点时 abort 重启）：
 
 1. **Room Air Conditioner** — 开关 / 温控  
 2. **Fan** — 风扇档位（便于部分手机 UI 露出风速）  
@@ -320,7 +320,8 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 |------|------|
 | 编译缺 `IRremoteESP8266` | `git submodule update --init --recursive` |
 | 目标芯片不对 | 必须 `idf.py set-target esp32s3`（不再支持默认 C3） |
-| 端点创建失败 / 湿度或灯不出现 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4` 后重新 `fullclean` + 编译 |
+| 端点创建失败 / 湿度或灯不出现 / 启动 abort 重启 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8` 后重新 `fullclean` + 编译；串口若见 `Failed to create dimmable light endpoint` 即为此项 |
+| 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；配网页在圆屏，串口会打 `UI Matter code:` / CHIP onboarding QR |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h` |
 | 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |
