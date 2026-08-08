@@ -199,17 +199,30 @@ public:
     void OnSubscriptionTerminated(
         chip::app::ReadHandler &handler) override
     {
-        ESP_LOGI( TAG, "Matter subscription terminated");
+        ESP_LOGI(TAG, "Matter subscription terminated");
         /*
-         * This callback is invoked just before the subscription is removed.
-         * The current handler may still be present in the active handler list,
-         * so recount the subscriptions after the current CHIP operation completes.
+         * This callback runs just before the subscription is removed.
+         * The current handler may still appear in the active list, so recount
+         * after the current CHIP operation completes. That keeps IR parsing
+         * and LED state aligned with the real subscription count.
          */
-        //chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        //    []() {
-        //        app_update_matter_state_locked();
-        //    }
-        //);
+        chip::DeviceLayer::SystemLayer().ScheduleLambda(
+            []() {
+                const uint32_t count =
+                    app_count_active_subscriptions_locked();
+
+                ESP_LOGI(
+                    TAG,
+                    "OnSubscriptionTerminated: active=%lu",
+                    static_cast<unsigned long>(count)
+                );
+
+                app_driver_set_subscription_active(
+                    count > 0
+                );
+                app_driver_update_led_states();
+            }
+        );
     }
 };
 
