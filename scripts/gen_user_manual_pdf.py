@@ -131,7 +131,8 @@ class ManualPDF(FPDF):
         self._reset_x()
         self.set_font("cn", "B", 15)
         self.set_text_color(*C_NAVY)
-        self.multi_cell(0, 9, title)
+        # Left-align CJK body text — fpdf2 default JUSTIFY opens huge gaps with mixed CN/EN.
+        self.multi_cell(0, 9, title, align="L")
         self._reset_x()
         self.set_draw_color(*C_NAVY)
         self.set_line_width(0.45)
@@ -145,7 +146,7 @@ class ManualPDF(FPDF):
         self._reset_x()
         self.set_font("cn", "B", 11.5)
         self.set_text_color(*C_NAVY2)
-        self.multi_cell(0, 7, title)
+        self.multi_cell(0, 7, title, align="L")
         self._reset_x()
         self.set_text_color(*C_TEXT)
 
@@ -153,7 +154,7 @@ class ManualPDF(FPDF):
         self._reset_x()
         self.set_font("cn", "", 10)
         self.set_text_color(*C_TEXT)
-        self.multi_cell(0, 6, text)
+        self.multi_cell(0, 6, text, align="L")
         self._reset_x()
         self.ln(1)
 
@@ -162,7 +163,7 @@ class ManualPDF(FPDF):
         self.set_text_color(*C_TEXT)
         for item in items:
             self._reset_x()
-            self.multi_cell(0, 6, f"•  {item}")
+            self.multi_cell(0, 6, f"•  {item}", align="L")
         self._reset_x()
         self.ln(1)
 
@@ -171,7 +172,7 @@ class ManualPDF(FPDF):
         self.set_text_color(*C_TEXT)
         for i, item in enumerate(items, 1):
             self._reset_x()
-            self.multi_cell(0, 6, f"{i}.  {item}")
+            self.multi_cell(0, 6, f"{i}.  {item}", align="L")
         self._reset_x()
         self.ln(1)
 
@@ -183,7 +184,7 @@ class ManualPDF(FPDF):
         self.set_text_color(*C_TEXT)
         start = self.get_y()
         self.set_x(self.l_margin + 2)
-        self.multi_cell(self.epw - 4, 5.5, f"提示：{text}")
+        self.multi_cell(self.epw - 4, 5.5, f"提示：{text}", align="L")
         end = self.get_y()
         self.rect(self.l_margin, start - 1.5, self.epw, end - start + 3)
         self.set_y(end + 3)
@@ -289,7 +290,7 @@ class ManualPDF(FPDF):
                 x = self.get_x()
                 self.rect(x, y0, w, row_h, style="DF" if fill else "D")
                 self.set_xy(x + 1, y0 + 1)
-                self.multi_cell(w - 2, 5, text, border=0)
+                self.multi_cell(w - 2, 5, text, border=0, align="L")
                 self.set_xy(x + w, y0)
             self.set_xy(x0, y0 + row_h)
             fill = not fill
