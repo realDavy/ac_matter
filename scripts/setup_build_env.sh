@@ -40,7 +40,8 @@ fi
 
 echo "==> IDF_PATH=$IDF_PATH"
 echo "==> ESP_MATTER_PATH=$ESP_MATTER_PATH"
-echo "==> IDF_COMPONENT_REGISTRY_URL=$IDF_COMPONENT_REGISTRY_URL"
+echo "==> IDF_COMPONENT_STORAGE_URL=$IDF_COMPONENT_STORAGE_URL"
+echo "==> IDF_COMPONENT_REGISTRY_URL=${IDF_COMPONENT_REGISTRY_URL:-<default components.espressif.com>}"
 
 # shellcheck disable=SC1091
 . "$IDF_PATH/export.sh" || {

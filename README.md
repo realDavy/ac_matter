@@ -149,7 +149,8 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 | 报错 | 原因 | 处理 |
 |------|------|------|
 | `idf.py: command not found` | 未 source IDF | `. $IDF_PATH/export.sh` |
-| `Cannot establish a connection to the component registry` / `components-file.espressif.com` | 国内访问官方组件源失败 | `export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn` |
+| `Cannot establish a connection…components-file.espressif.com` | 国内拉组件慢/失败 | `export IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn`（只改存储镜像） |
+| `Access forbidden … components-file.espressif.cn/api` **403** | 把 `.cn` 误设成了 `IDF_COMPONENT_REGISTRY_URL` | **取消**该变量；改用上面的 `IDF_COMPONENT_STORAGE_URL` |
 | `The 'gn' command was not found` | 未安装 / 未 source ESP-Matter | 在已 source IDF 后执行 `esp-matter/install.sh`，再 `. $ESP_MATTER_PATH/export.sh` |
 
 #### 一次安装（本机只需成功跑一遍）
@@ -159,7 +160,9 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 ```bash
 export IDF_PATH=~/esp-adf/esp-idf
 export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
-export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+# 国内：只镜像组件文件 CDN；注册表 API 仍用默认 components.espressif.com
+unset IDF_COMPONENT_REGISTRY_URL
+export IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn
 
 # 1) IDF 工具链（若早已 install 过可跳过）
 cd "$IDF_PATH"
@@ -187,18 +190,20 @@ bash scripts/setup_build_env.sh --install
 ```bash
 export IDF_PATH=~/esp-adf/esp-idf
 export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
-export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+unset IDF_COMPONENT_REGISTRY_URL
+export IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn
 . "$IDF_PATH/export.sh"
 . "$ESP_MATTER_PATH/export.sh"
 # 或：. /path/to/ac_matter/scripts/setup_build_env.sh
 ```
 
-建议写入 `~/.bashrc`（永久生效镜像与路径；`export.sh` 仍建议每次编译前手动 source，避免污染所有终端）：
+建议写入 `~/.bashrc`（永久生效路径与存储镜像）：
 
 ```bash
 export IDF_PATH=~/esp-adf/esp-idf
 export ESP_MATTER_PATH=~/esp-adf/esp-idf/esp-matter
-export IDF_COMPONENT_REGISTRY_URL=https://components-file.espressif.cn
+unset IDF_COMPONENT_REGISTRY_URL
+export IDF_COMPONENT_STORAGE_URL=https://components-file.espressif.cn
 ```
 
 ### 获取源码
