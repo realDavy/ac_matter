@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate docs/aidaegis_ac_remote_user_manual.pdf (Chinese user guide)."""
+"""Generate docs/aidaegis_ac_remote_user_manual.pdf — commercial Chinese user guide."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ from fontTools.ttLib import TTCollection
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "aidaegis_ac_remote_user_manual.pdf"
+IMG = ROOT / "img" / "manual"
 WQY_TTC = Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")
 
 
 def resolve_font() -> Path:
-    """WenQuanYi Micro Hei covers CJK + Latin; DroidSansFallback is CJK-only."""
+    """WenQuanYi Micro Hei covers CJK + Latin."""
     cached = ROOT / "docs" / "fonts" / "wqy-microhei.ttf"
     if cached.is_file():
         return cached
@@ -27,112 +28,138 @@ def resolve_font() -> Path:
 
 FONT = resolve_font()
 
+# Brand palette
+C_NAVY = (24, 48, 72)
+C_NAVY2 = (36, 64, 96)
+C_TEXT = (35, 38, 42)
+C_MUTED = (110, 116, 124)
+C_LINE = (210, 216, 222)
+C_SOFT = (245, 248, 252)
+C_ACCENT = (180, 200, 220)
+
+
+def img(name: str) -> Path:
+    p = IMG / name
+    if not p.is_file():
+        raise SystemExit(f"Missing image: {p}")
+    return p
+
 
 class ManualPDF(FPDF):
     def __init__(self) -> None:
         super().__init__(format="A4", unit="mm")
         self.set_auto_page_break(auto=True, margin=18)
+        self.set_margins(18, 18, 18)
         self.add_font("cn", "", str(FONT))
         self.add_font("cn", "B", str(FONT))
 
     def header(self) -> None:
-        if self.page_no() == 1:
+        if self.page_no() <= 1:
             return
-        self.set_font("cn", "", 9)
-        self.set_text_color(110, 110, 110)
-        self.cell(0, 8, "aidaegis AC Remote · 用户使用说明", align="L")
-        self.ln(4)
-        self.set_draw_color(200, 200, 200)
+        self.set_font("cn", "", 8.5)
+        self.set_text_color(*C_MUTED)
+        self.cell(0, 7, "aidaegis AC Remote  ·  用户说明书", align="L")
+        self.ln(2)
+        self.set_draw_color(*C_LINE)
+        self.set_line_width(0.25)
         self.line(self.l_margin, 14, self.w - self.r_margin, 14)
         self.ln(6)
-        self.set_text_color(20, 20, 20)
+        self.set_text_color(*C_TEXT)
 
     def footer(self) -> None:
+        if self.page_no() <= 1:
+            return
         self.set_y(-14)
+        self.set_draw_color(*C_LINE)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+        self.set_y(-12)
         self.set_font("cn", "", 8)
-        self.set_text_color(130, 130, 130)
-        self.cell(0, 8, f"{self.page_no()}", align="C")
+        self.set_text_color(*C_MUTED)
+        self.cell(0, 8, f"— {self.page_no()} —", align="C")
 
     def _reset_x(self) -> None:
         self.set_x(self.l_margin)
 
     def cover(self) -> None:
         self.add_page()
-        self.ln(42)
-        self.set_font("cn", "B", 28)
-        self.set_text_color(24, 48, 72)
+        # Hero product image
+        hero = img("product_hero_desk_pdf.jpg")
+        iw = self.epw
+        ih = iw * 1024 / 1536
+        self.image(str(hero), x=self.l_margin, y=22, w=iw, h=ih)
+
+        y = 22 + ih + 10
+        self.set_y(y)
+        self.set_font("cn", "B", 26)
+        self.set_text_color(*C_NAVY)
         self.set_x(self.l_margin)
-        self.multi_cell(self.epw, 14, "aidaegis", align="C")
-        self.set_font("cn", "B", 22)
+        self.multi_cell(self.epw, 12, "aidaegis", align="C")
+        self.set_font("cn", "B", 20)
         self.set_x(self.l_margin)
-        self.multi_cell(self.epw, 12, "AC Remote", align="C")
-        self.ln(6)
-        self.set_draw_color(24, 48, 72)
-        self.set_line_width(0.4)
-        self.line(70, self.get_y(), 140, self.get_y())
-        self.ln(10)
-        self.set_font("cn", "", 16)
-        self.set_text_color(40, 40, 40)
+        self.multi_cell(self.epw, 10, "AC Remote", align="C")
+        self.ln(2)
+        self.set_draw_color(*C_NAVY)
+        self.set_line_width(0.45)
+        cy = self.get_y()
+        self.line(78, cy, 132, cy)
+        self.ln(7)
+        self.set_font("cn", "", 14)
+        self.set_text_color(*C_TEXT)
         self.set_x(self.l_margin)
-        self.multi_cell(self.epw, 10, "Matter 空调红外控制器", align="C")
-        self.set_font("cn", "", 12)
-        self.set_text_color(90, 90, 90)
-        self.set_x(self.l_margin)
-        self.multi_cell(self.epw, 8, "用户使用说明", align="C")
-        self.ln(18)
+        self.multi_cell(self.epw, 8, "智能空调控制器  ·  用户说明书", align="C")
+        self.ln(4)
         self.set_font("cn", "", 10)
+        self.set_text_color(*C_MUTED)
         self.set_x(self.l_margin)
         self.multi_cell(
             self.epw,
             6,
-            "适用于 ESP32-S3 + 1.28″ 圆屏（GC9A01 / IT7259）固件\n"
-            "支持 Apple Home / Google Home / Home Assistant（Matter）\n"
-            "固件版本：3.0-s3-ui",
+            "支持 Apple 家庭 / Google Home / Home Assistant\n"
+            "圆屏触控 · Matter 本地控制 · 氛围光环",
             align="C",
         )
-        self.ln(30)
+        self.set_y(-28)
         self.set_font("cn", "", 9)
-        self.set_text_color(120, 120, 120)
+        self.set_text_color(*C_MUTED)
         self.set_x(self.l_margin)
-        self.multi_cell(
-            self.epw,
-            5,
-            "请先阅读「放置建议」与「首次使用」两节，再进行配网与红外学习。",
-            align="C",
-        )
+        self.multi_cell(self.epw, 5, "请妥善保管本说明书，以便日后查阅。", align="C")
 
     def h1(self, title: str) -> None:
-        self.ln(4)
+        if self.get_y() > self.h - 40:
+            self.add_page()
+        self.ln(3)
         self._reset_x()
-        self.set_font("cn", "B", 16)
-        self.set_text_color(24, 48, 72)
+        self.set_font("cn", "B", 15)
+        self.set_text_color(*C_NAVY)
         self.multi_cell(0, 9, title)
         self._reset_x()
-        self.set_draw_color(24, 48, 72)
-        self.set_line_width(0.5)
+        self.set_draw_color(*C_NAVY)
+        self.set_line_width(0.45)
         y = self.get_y()
-        self.line(self.l_margin, y, self.l_margin + 50, y)
+        self.line(self.l_margin, y, self.l_margin + 36, y)
         self.ln(4)
-        self.set_text_color(30, 30, 30)
+        self.set_text_color(*C_TEXT)
 
     def h2(self, title: str) -> None:
         self.ln(2)
         self._reset_x()
-        self.set_font("cn", "B", 12)
-        self.set_text_color(36, 64, 96)
+        self.set_font("cn", "B", 11.5)
+        self.set_text_color(*C_NAVY2)
         self.multi_cell(0, 7, title)
         self._reset_x()
-        self.set_text_color(30, 30, 30)
+        self.set_text_color(*C_TEXT)
 
     def p(self, text: str) -> None:
         self._reset_x()
         self.set_font("cn", "", 10)
+        self.set_text_color(*C_TEXT)
         self.multi_cell(0, 6, text)
         self._reset_x()
         self.ln(1)
 
     def bullets(self, items: list[str]) -> None:
         self.set_font("cn", "", 10)
+        self.set_text_color(*C_TEXT)
         for item in items:
             self._reset_x()
             self.multi_cell(0, 6, f"•  {item}")
@@ -141,6 +168,7 @@ class ManualPDF(FPDF):
 
     def numbered(self, items: list[str]) -> None:
         self.set_font("cn", "", 10)
+        self.set_text_color(*C_TEXT)
         for i, item in enumerate(items, 1):
             self._reset_x()
             self.multi_cell(0, 6, f"{i}.  {item}")
@@ -149,9 +177,10 @@ class ManualPDF(FPDF):
 
     def note(self, text: str) -> None:
         self._reset_x()
-        self.set_fill_color(245, 248, 252)
-        self.set_draw_color(180, 200, 220)
+        self.set_fill_color(*C_SOFT)
+        self.set_draw_color(*C_ACCENT)
         self.set_font("cn", "", 9)
+        self.set_text_color(*C_TEXT)
         start = self.get_y()
         self.set_x(self.l_margin + 2)
         self.multi_cell(self.epw - 4, 5.5, f"提示：{text}")
@@ -159,19 +188,83 @@ class ManualPDF(FPDF):
         self.rect(self.l_margin, start - 1.5, self.epw, end - start + 3)
         self.set_y(end + 3)
         self._reset_x()
-        self.set_text_color(30, 30, 30)
+        self.set_text_color(*C_TEXT)
+
+    def caption(self, text: str) -> None:
+        self._reset_x()
+        self.set_font("cn", "", 8.5)
+        self.set_text_color(*C_MUTED)
+        self.multi_cell(0, 5, text, align="C")
+        self._reset_x()
+        self.set_text_color(*C_TEXT)
+        self.ln(2)
+
+    def fig(self, path: Path, width: float | None = None, caption: str = "") -> None:
+        """Place a centered figure; page-break if needed."""
+        w = width if width is not None else self.epw * 0.72
+        # Estimate height from image aspect
+        from PIL import Image as PILImage
+
+        with PILImage.open(path) as im:
+            iw, ih = im.size
+        h = w * ih / iw
+        need = h + (8 if caption else 2)
+        if self.get_y() + need > self.page_break_trigger:
+            self.add_page()
+        x = self.l_margin + (self.epw - w) / 2
+        self.image(str(path), x=x, y=self.get_y(), w=w, h=h)
+        self.set_y(self.get_y() + h + 1)
+        if caption:
+            self.caption(caption)
+
+    def figs_row(
+        self,
+        paths: list[Path],
+        captions: list[str],
+        gap: float = 6,
+        width: float | None = None,
+    ) -> None:
+        n = len(paths)
+        assert n == len(captions) and n >= 2
+        w = width if width is not None else (self.epw - gap * (n - 1)) / n
+        from PIL import Image as PILImage
+
+        heights = []
+        for p in paths:
+            with PILImage.open(p) as im:
+                iw, ih = im.size
+            heights.append(w * ih / iw)
+        h = max(heights)
+        need = h + 12
+        if self.get_y() + need > self.page_break_trigger:
+            self.add_page()
+        y0 = self.get_y()
+        x0 = self.l_margin
+        for i, (p, cap) in enumerate(zip(paths, captions)):
+            x = x0 + i * (w + gap)
+            self.image(str(p), x=x, y=y0, w=w, h=heights[i])
+        self.set_y(y0 + h + 1)
+        self.set_font("cn", "", 8)
+        self.set_text_color(*C_MUTED)
+        for i, cap in enumerate(captions):
+            x = x0 + i * (w + gap)
+            self.set_xy(x, self.get_y())
+            self.multi_cell(w, 4.5, cap, align="C")
+        self._reset_x()
+        self.set_text_color(*C_TEXT)
+        self.ln(3)
 
     def table(self, headers: list[str], rows: list[list[str]], col_w: list[float]) -> None:
         self._reset_x()
         self.set_font("cn", "B", 9)
-        self.set_fill_color(24, 48, 72)
+        self.set_fill_color(*C_NAVY)
         self.set_text_color(255, 255, 255)
         for h, w in zip(headers, col_w):
             self.cell(w, 7, h, border=1, fill=True, align="C")
         self.ln()
         self._reset_x()
         self.set_font("cn", "", 9)
-        self.set_text_color(30, 30, 30)
+        self.set_text_color(*C_TEXT)
         fill = False
         for row in rows:
             self.set_fill_color(248, 250, 252)
@@ -181,14 +274,14 @@ class ManualPDF(FPDF):
                 self.add_page()
                 self._reset_x()
                 self.set_font("cn", "B", 9)
-                self.set_fill_color(24, 48, 72)
+                self.set_fill_color(*C_NAVY)
                 self.set_text_color(255, 255, 255)
                 for h, w in zip(headers, col_w):
                     self.cell(w, 7, h, border=1, fill=True, align="C")
                 self.ln()
                 self._reset_x()
                 self.set_font("cn", "", 9)
-                self.set_text_color(30, 30, 30)
+                self.set_text_color(*C_TEXT)
             y0 = self.get_y()
             x0 = self.l_margin
             self.set_x(x0)
@@ -213,223 +306,380 @@ class ManualPDF(FPDF):
             lines += max(1, (len(para) + chars_per_line - 1) // chars_per_line)
         return lines
 
+    def toc_line(self, num: str, title: str) -> None:
+        self._reset_x()
+        self.set_font("cn", "", 11)
+        self.set_text_color(*C_TEXT)
+        self.cell(12, 8, num)
+        self.cell(0, 8, title)
+        self.ln(8)
+
 
 def build() -> Path:
     pdf = ManualPDF()
-    pdf.set_title("aidaegis AC Remote 用户使用说明")
+    pdf.set_title("aidaegis AC Remote 用户说明书")
     pdf.set_author("aidaegis")
-    pdf.set_creator("bc7215_ac_matter")
+    pdf.set_creator("aidaegis AC Remote")
+    pdf.set_keywords("aidaegis, AC Remote, Matter, 空调, 用户说明书")
 
+    # ——— Cover ———
     pdf.cover()
 
+    # ——— TOC ———
+    pdf.add_page()
+    pdf.h1("目录")
+    toc = [
+        ("01", "产品简介"),
+        ("02", "外观与界面总览"),
+        ("03", "放置建议"),
+        ("04", "首次使用：智能家居配网"),
+        ("05", "绑定空调（红外学习）"),
+        ("06", "圆屏操作说明"),
+        ("07", "手机 App 控制"),
+        ("08", "氛围灯光"),
+        ("09", "恢复出厂设置"),
+        ("10", "常见问题"),
+        ("11", "产品规格"),
+        ("12", "安全与注意事项"),
+    ]
+    for num, title in toc:
+        pdf.toc_line(num, title)
+
+    # ——— 1 产品简介 ———
     pdf.add_page()
     pdf.h1("1. 产品简介")
     pdf.p(
-        "AC Remote 是一款 Matter 本地智能空调控制器。它通过红外控制家中空调，"
-        "并通过 Wi-Fi Matter 接入 Apple Home、Google Home 或 Home Assistant，"
-        "无需依赖空调厂商云服务。"
-    )
-    pdf.p("本机配备 1.28″ 圆形触摸屏，可在屏上完成配网扫码、红外学习、空调控制与氛围灯设置。")
-    pdf.h2("主要能力")
-    pdf.bullets(
-        [
-            "Matter 配网：屏上动态二维码与数字配对码",
-            "红外学习：用原装遥控器对机学习协议",
-            "空调控制：开关、制冷/制热、设定温度、风扇档位（屏上与手机双向同步）",
-            "氛围灯：Matter 开关与亮度；多种灯光模式仅在屏上选择",
-            "可选 SHT30：上报真实室温与湿度",
-            "中英文界面切换（默认中文）",
-        ]
-    )
-    pdf.note(
-        "本产品仅支持 IRremoteESP8266 库已实现的空调协议，不是“任意遥控万能学习”。"
-        "若遥控协议不在支持列表中，自动学习会失败，可尝试 BOOT 双击协议遍历。"
-    )
-
-    pdf.h1("2. 放置建议")
-    pdf.p("设备同时承担“对空调发红外”和“接收原装遥控红外”两项工作，放置位置很重要：")
-    pdf.numbered(
-        [
-            "放在空调附近，红外发射管朝向空调出风口/机体接收窗方向。",
-            "红外接收头大致朝向日常使用遥控器的人（客厅/床位方向）。",
-            "避免金属遮挡与强阳光直射接收头；保持供电稳定。",
-            "手机与设备须使用 2.4 GHz Wi-Fi（Matter over Wi-Fi 不支持 5 GHz）。",
-        ]
-    )
-
-    pdf.h1("3. 首次使用：Matter 配网")
-    pdf.numbered(
-        [
-            "给设备上电。未入网时，圆屏显示「Matter 配网」页、二维码与数字配对码。",
-            "确认手机已连接 2.4 GHz 家庭 Wi-Fi。",
-            "打开 Apple「家庭」/ Google Home / Home Assistant Companion，选择添加 Matter 配件。",
-            "扫描屏上二维码，或手动输入屏上数字配对码。",
-            "若提示“未认证 / 未经验证的配件”，按系统指引继续即可（DIY/自研固件常见提示）。",
-            "配网成功后，手机中可见设备名默认为「AC Remote」，厂商为 aidaegis。",
-        ]
-    )
-    pdf.note(
-        "屏上二维码内容由固件实时生成，与串口日志中的 MT:... 一致。"
-        "请扫当前屏上显示的码，勿使用说明书印刷样例。"
-    )
-
-    pdf.h1("4. 红外学习（绑定空调）")
-    pdf.p("完成 Matter 配网后，若尚未学码，屏幕会进入「红外学习」页。")
-    pdf.numbered(
-        [
-            "点按「开始学习」。此时 WS2812 氛围灯呈黄色呼吸，表示正在等待遥控信号。",
-            "用原装遥控器对准本机红外接收头，按任意键（建议：制冷、25℃、任意风速）。",
-            "学习成功后自动进入空调控制页。",
-            "若失败，可能是协议不受支持；请参考第 7 节「BOOT 双击协议遍历」。",
-        ]
-    )
-    pdf.note("BOOT 按键单击不再进入学习。学习入口仅在触摸屏「开始学习」。")
-
-    pdf.h1("5. 圆屏操作")
-    pdf.h2("5.1 空调页")
-    pdf.bullets(
-        [
-            "开启 / 关闭空调",
-            "降温 / 升温（整度调节）",
-            "状态与手机 Matter 控制器双向同步",
-            "提示「左滑灯光」可进入氛围灯页",
-        ]
-    )
-    pdf.h2("5.2 灯光页")
-    pdf.p("在空调页向左滑动进入灯光页；向右滑动返回。")
-    pdf.table(
-        ["屏上模式", "效果说明"],
-        [
-            ["夜间关闭", "灯灭"],
-            ["手动亮度", "白光，跟随亮度滑条 / Matter 亮度"],
-            ["温感呼吸（默认）", "按室温绿→橙呼吸（约 2.5 秒）"],
-            ["纯色", "按温感色固定点亮"],
-            ["彩虹", "色相循环"],
-            ["呼吸白", "白光呼吸"],
-            ["学习中（临时）", "强制黄色呼吸，学习结束后恢复"],
-        ],
-        [45, 145],
+        "感谢您选择 aidaegis AC Remote。本产品是一款面向家庭使用的智能空调控制器，"
+        "通过红外方式控制家中空调，并以 Matter 标准接入 Apple「家庭」、Google Home "
+        "或 Home Assistant 等智能家居平台，实现本地控制，无需依赖空调厂商云服务。"
     )
     pdf.p(
-        "亮度滑条对应 Matter LevelControl。手机 App 可开关灯与调节亮度；"
-        "彩虹、呼吸等氛围模式仅本地屏上选择，一般不会出现在手机 Home 界面。"
+        "设备采用光环造型设计：外圈为氛围灯环，内嵌 1.28 英寸圆形触摸屏。"
+        "您可在屏上完成配网、空调绑定、日常控制与灯光设置，也可通过手机 App 远程操作。"
     )
-    pdf.h2("5.3 语言切换")
-    pdf.p("点按右上角「EN / 中文」可在中文与英文界面间切换。出厂默认中文。")
 
-    pdf.h1("6. 手机 App 控制")
-    pdf.p("配网并完成红外学习后，可在手机中控制：")
-    pdf.table(
-        ["端点", "可控制内容"],
+    pdf.h2("主要功能")
+    pdf.bullets(
         [
-            ["空调（Room AC）", "开关、制冷/制热、目标温度（整度 ℃）"],
-            ["风扇（Fan）", "低 / 中 / 高风速（部分手机界面会单独显示）"],
-            ["湿度传感器", "相对湿度（需安装 SHT30）"],
-            ["氛围灯（Dimmable Light）", "开关 + 亮度"],
-        ],
-        [50, 140],
+            "智能家居配网：圆屏显示动态二维码与数字配对码，一键添加至家庭平台",
+            "空调绑定：使用原装遥控器完成红外学习，快速对接您的空调",
+            "本地控制：开关、制冷/制热、设定温度、风扇档位；屏上与手机状态双向同步",
+            "氛围灯环：多种灯光模式与亮度调节，可在手机端开关与调光",
+            "环境感知（选配）：支持室温与湿度显示",
+            "中英文界面：出厂默认中文，可一键切换英文",
+        ]
+    )
+    pdf.fig(
+        img("product_studio_front_pdf.jpg"),
+        width=95,
+        caption="图 1-1  产品正面（氛围灯环点亮示意）",
     )
     pdf.note(
-        "半度温度、扫风摆叶、除湿/仅通风等，受 Matter HVAC 表达与红外协议能力限制，"
-        "可能弱于原装遥控器。收到手机命令时，固件会尽量映射到可用红外模式。"
+        "本产品通过红外协议控制空调。若您的空调遥控协议不受支持，绑定可能失败。"
+        "届时请参考「常见问题」或联系售后支持。"
     )
 
-    pdf.h1("7. BOOT 按键")
-    pdf.table(
-        ["操作", "作用"],
-        [
-            ["单击", "无功能（不进入学习）"],
-            ["双击", "Alt 协议遍历：依次尝试库内候选协议"],
-            ["长按约 5 秒", "恢复出厂（清除红外配对与 Matter 配网）"],
-        ],
-        [45, 145],
+    # ——— 2 外观与界面总览 ———
+    pdf.h1("2. 外观与界面总览")
+    pdf.p(
+        "请先熟悉产品各部分名称，以便后续阅读操作说明。"
     )
-    pdf.h2("双击协议遍历步骤")
+    pdf.h2("2.1 外观结构")
+    pdf.table(
+        ["名称", "说明"],
+        [
+            ["氛围灯环", "外圈环形灯带，提供环境照明与状态氛围"],
+            ["圆形触摸屏", "1.28 英寸触控显示屏，用于配网、学习与日常控制"],
+            ["底座", "稳定支撑整机，便于桌面放置"],
+            ["电源接口", "位于底座后方，连接附赠电源线供电"],
+        ],
+        [40, 134],
+    )
+    pdf.figs_row(
+        [img("product_studio_front_pdf.jpg"), img("product_side_power_pdf.jpg")],
+        ["图 2-1  正面外观", "图 2-2  侧面与电源连接"],
+        gap=8,
+    )
+
+    pdf.h2("2.2 圆屏界面一览")
+    pdf.p("设备根据使用阶段自动切换界面，主要页面如下：")
+    pdf.table(
+        ["界面", "何时出现", "您可以做什么"],
+        [
+            ["智能家居配网", "首次上电或未完成配网时", "扫码或输入配对码，加入家庭平台"],
+            ["红外学习", "配网完成后尚未绑定空调时", "点按「开始学习」，用原装遥控绑定"],
+            ["空调控制", "绑定完成后（日常使用）", "开关空调、调节温度；左滑进入灯光"],
+            ["氛围灯光", "在空调页向左滑动进入", "选择灯光模式、调节亮度"],
+        ],
+        [36, 52, 86],
+    )
+    pdf.figs_row(
+        [
+            img("ui_pairing_on_device_pdf.jpg"),
+            img("ui_learn_on_device_pdf.jpg"),
+        ],
+        ["图 2-3  配网页", "图 2-4  红外学习页"],
+        gap=8,
+    )
+    pdf.figs_row(
+        [
+            img("ui_ac_on_device_pdf.jpg"),
+            img("ui_light_on_device_pdf.jpg"),
+        ],
+        ["图 2-5  空调控制页", "图 2-6  氛围灯光页"],
+        gap=8,
+    )
+
+    # ——— 3 放置建议 ———
+    pdf.h1("3. 放置建议")
+    pdf.p(
+        "正确放置有助于红外控制更稳定，也能让灯环氛围效果更舒适。"
+    )
     pdf.numbered(
         [
-            "自动学习失败时，双击 BOOT。",
-            "设备按列表发送“制冷 / 25℃”测试帧；观察空调是否有反应（如滴一声）。",
-            "空调有反应后，在手机上发任意 Matter 命令（如改温度）以确认当前协议。",
-            "状态灯闪烁次数对应协议序号；试完一轮仍无效则回到未配对状态。",
+            "将设备放置在空调附近的桌面或台面，保证前方开阔、无遮挡。",
+            "使红外发射方向大致朝向空调室内机的接收窗口（通常位于出风口附近）。",
+            "使设备能够接收到您日常使用原装遥控器时的红外信号（便于状态同步）。",
+            "避免强阳光直射屏幕与接收区域；远离金属大面积遮挡。",
+            "使用稳定电源供电；手机与设备须连接同一家庭网络中的 2.4 GHz Wi-Fi。",
+        ]
+    )
+    pdf.fig(
+        img("product_hero_desk_pdf.jpg"),
+        width=pdf.epw * 0.88,
+        caption="图 3-1  建议放置于床头柜、书桌等稳定平面",
+    )
+    pdf.note(
+        "Matter 配网依赖 2.4 GHz Wi-Fi。若家中路由器为双频合一，请确认手机当前已连接 2.4 GHz 频段。"
+    )
+
+    # ——— 4 配网 ———
+    pdf.h1("4. 首次使用：智能家居配网")
+    pdf.p(
+        "首次上电后，圆屏将显示「Matter 配网」界面，包含动态二维码与数字配对码。"
+        "请使用您常用的智能家居 App 完成添加。"
+    )
+    pdf.fig(
+        img("ui_pairing_on_device_pdf.jpg"),
+        width=78,
+        caption="图 4-1  配网界面：扫码或输入配对码",
+    )
+
+    pdf.h2("操作步骤")
+    pdf.numbered(
+        [
+            "为设备接通电源，等待圆屏显示「Matter 配网」页面。",
+            "确认手机已连接家庭 2.4 GHz Wi-Fi。",
+            "打开 Apple「家庭」、Google Home 或 Home Assistant Companion，选择添加 Matter 配件。",
+            "扫描屏上二维码；若不便扫码，可手动输入屏上显示的数字配对码。",
+            "若系统提示“未认证 / 未经验证的配件”，按提示继续即可。",
+            "配网成功后，手机中将出现本设备（默认名称：AC Remote；品牌：aidaegis）。",
+        ]
+    )
+    pdf.note(
+        "屏上二维码由设备实时生成。请务必扫描当前屏幕显示的二维码，"
+        "勿使用说明书或其他渠道中的示例图片。"
+    )
+
+    # ——— 5 红外学习 ———
+    pdf.h1("5. 绑定空调（红外学习）")
+    pdf.p(
+        "完成智能家居配网后，若尚未绑定空调，屏幕将进入「红外学习」页。"
+        "请准备好空调原装遥控器。"
+    )
+    pdf.fig(
+        img("ui_learn_on_device_pdf.jpg"),
+        width=78,
+        caption="图 5-1  红外学习界面",
+    )
+
+    pdf.h2("操作步骤")
+    pdf.numbered(
+        [
+            "在圆屏上点按「开始学习」。此时氛围灯环呈黄色柔和呼吸，表示正在等待遥控信号。",
+            "将原装遥控器对准本设备，按下任意键（建议：制冷模式、25℃、任意风速）。",
+            "学习成功后，屏幕自动进入空调控制页，即可开始使用。",
+            "若多次失败，请确认遥控器电量充足、对准方向正确，并参阅第 10 章「常见问题」。",
+        ]
+    )
+    pdf.note(
+        "学习入口仅在触摸屏「开始学习」。绑定完成后，日常使用原装遥控时，"
+        "设备可接收信号并尽量与手机端状态保持同步。"
+    )
+
+    # ——— 6 圆屏操作 ———
+    pdf.h1("6. 圆屏操作说明")
+    pdf.p(
+        "绑定完成后，日常控制主要通过空调控制页完成。右上角「EN / 中文」可切换界面语言。"
+    )
+
+    pdf.h2("6.1 空调控制页")
+    pdf.fig(
+        img("ui_ac_on_device_pdf.jpg"),
+        width=78,
+        caption="图 6-1  空调控制页示意",
+    )
+    pdf.table(
+        ["屏幕元素", "操作说明"],
+        [
+            ["标题「空调」", "表示当前为空调控制界面"],
+            ["温度显示", "显示当前设定温度（整度）"],
+            ["「开启 / 关闭」", "点按切换空调电源状态"],
+            ["「降温」「升温」", "以 1℃ 为步进调节设定温度"],
+            ["「EN」语言按钮", "点按切换中文 / 英文界面"],
+            ["「左滑灯光」提示", "向左滑动进入氛围灯光页"],
+        ],
+        [45, 129],
+    )
+    pdf.p("屏上状态与手机智能家居 App 中的控制状态双向同步，任一侧更改都会反映到另一侧。")
+
+    pdf.h2("6.2 氛围灯光页")
+    pdf.p("在空调控制页向左滑动，进入氛围灯光页；向右滑动可返回空调页。")
+    pdf.fig(
+        img("ui_light_on_device_pdf.jpg"),
+        width=78,
+        caption="图 6-2  氛围灯光页示意",
+    )
+    pdf.table(
+        ["灯光模式", "效果说明"],
+        [
+            ["夜间关闭", "关闭灯环，适合睡眠环境"],
+            ["手动亮度", "白光常亮，亮度跟随滑条或手机调节"],
+            ["温感呼吸", "出厂默认；按室温在绿色至橙色间柔和呼吸"],
+            ["纯色", "按当前温感色固定点亮"],
+            ["彩虹", "色彩循环变化"],
+            ["呼吸白", "白光呼吸效果"],
+        ],
+        [40, 134],
+    )
+    pdf.p(
+        "底部亮度滑条可调节灯环明暗。手机 App 可控制灯环开关与亮度；"
+        "彩虹、呼吸等氛围模式仅在本机圆屏选择。"
+    )
+
+    pdf.h2("6.3 语言切换")
+    pdf.p(
+        "在任意主要界面，点按屏幕右上角「EN」可切换为英文界面；"
+        "在英文界面点按「中文」可切回中文。出厂默认中文。"
+    )
+
+    # ——— 7 手机 App ———
+    pdf.h1("7. 手机 App 控制")
+    pdf.p(
+        "完成配网并绑定空调后，即可在手机智能家居应用中控制本设备。"
+        "不同平台界面略有差异，可控制内容如下："
+    )
+    pdf.table(
+        ["控制项", "可操作内容"],
+        [
+            ["空调", "开关、制冷/制热、目标温度（整度 ℃）"],
+            ["风扇", "低 / 中 / 高风速（部分手机界面会单独显示）"],
+            ["湿度", "相对湿度显示（需选配温湿度传感）"],
+            ["氛围灯", "开关与亮度调节"],
+        ],
+        [40, 134],
+    )
+    pdf.note(
+        "半度温度、扫风摆叶、除湿/仅通风等高级功能，可能受智能家居标准与空调协议限制，"
+        "表现可能与原装遥控器不完全一致。设备会尽量将手机指令映射为可用的红外控制。"
+    )
+
+    # ——— 8 氛围灯光 ———
+    pdf.h1("8. 氛围灯光")
+    pdf.p(
+        "灯环既是产品外观的一部分，也可作为柔和的环境照明。"
+        "您可在圆屏灯光页选择模式，或在手机 App 中开关灯环并调节亮度。"
+    )
+    pdf.figs_row(
+        [img("product_studio_front_pdf.jpg"), img("ui_light_on_device_pdf.jpg")],
+        ["图 8-1  灯环点亮效果", "图 8-2  灯光设置界面"],
+        gap=8,
+    )
+    pdf.bullets(
+        [
+            "睡眠场景建议选择「夜间关闭」，避免灯光影响休息。",
+            "「温感呼吸」适合日常使用，色调随室内温度氛围变化。",
+            "学习空调时灯环会临时变为黄色呼吸，学习结束后自动恢复原模式。",
         ]
     )
 
-    pdf.h1("8. 状态指示灯（GPIO11）")
-    pdf.p("机身上的状态 LED（低电平点亮）与 WS2812 氛围灯相互独立。")
-    pdf.table(
-        ["灯效", "含义"],
-        [
-            ["常亮", "出厂 / 尚未配置完成"],
-            ["常灭", "未上电，或 Alt 遍历进行中"],
-            ["快闪", "等待红外学习信号，或恢复出厂提示"],
-            ["慢闪", "正在建立网络连接"],
-            ["每秒闪 1 次", "网络已配好，空调尚未红外配对"],
-            ["每秒闪 2 次", "空调已配对，等待手机 Matter 连接/订阅"],
-            ["约每 3 秒闪一下", "配对与连接完成，待机"],
-        ],
-        [45, 145],
+    # ——— 9 恢复出厂 ———
+    pdf.h1("9. 恢复出厂设置")
+    pdf.p(
+        "当需要更换家庭网络、重新绑定其他空调，或设备状态异常时，可恢复出厂设置。"
+        "恢复后，智能家居配网信息与空调绑定记录将被清除。"
     )
-
-    pdf.h1("9. 恢复出厂")
     pdf.numbered(
         [
-            "长按 BOOT 约 5 秒，状态灯快闪。",
-            "松开按键后，设备清除红外配对与 Matter 配网数据。",
-            "重新上电后，从第 3 节再次配网，并从第 4 节重新学习红外。",
+            "找到机身复位键，长按约 5 秒。",
+            "松开后，设备将清除配网与空调绑定数据并重启。",
+            "重新上电后，请按第 4 章重新配网，并按第 5 章重新绑定空调。",
         ]
     )
-    pdf.note("若需重新生成设备序列号，需擦除 Flash / 清除 factory 分区后再烧录固件（面向开发者操作）。")
+    pdf.note("恢复出厂不会损坏硬件。完成后需重新完成配网与空调绑定，方可继续使用手机控制。")
 
+    # ——— 10 常见问题 ———
     pdf.h1("10. 常见问题")
     pdf.table(
         ["现象", "处理建议"],
         [
-            ["手机搜不到设备", "确认 2.4 GHz Wi-Fi；恢复出厂后重配；靠近路由器"],
-            ["屏上码扫不进", "确认未入网页；重新上电刷新二维码；或改输数字码"],
-            ["学习无反应", "对准接收头；先点「开始学习」；检查遥控电池"],
-            ["学到了但空调不动", "发射管朝向空调；检查距离/遮挡；试双击协议遍历"],
-            ["触摸无反应", "确认手指触控；重启设备；检查是否贴膜过厚"],
-            ["氛围灯不亮", "确认灯光页未选「夜间关闭」；手机端灯是否关闭；亮度是否过低"],
-            ["温度不准/无湿度", "需安装 SHT30；无传感器时仍可控制空调"],
-            ["想换一台空调", "恢复出厂或重新进入学习流程后，对新空调再学一次"],
+            ["手机找不到设备", "确认手机连接 2.4 GHz Wi-Fi；靠近路由器后重试；必要时恢复出厂后重新配网"],
+            ["屏上二维码扫不进", "确认仍处于配网页；重新上电刷新二维码；或改用数字配对码"],
+            ["学习时无反应", "先点「开始学习」再按遥控；对准设备；检查遥控器电池"],
+            ["已学习但空调不动", "调整设备朝向空调接收窗；缩短距离、排除遮挡后重试"],
+            ["触摸无反应", "使用手指直接触控；避免过厚贴膜；尝试重新上电"],
+            ["氛围灯不亮", "确认未选择「夜间关闭」；检查手机端灯是否关闭；适当提高亮度"],
+            ["温度/湿度不准或无显示", "温湿度为选配功能；未安装传感器时仍可正常控制空调"],
+            ["想换绑另一台空调", "恢复出厂设置后，重新配网并对新空调执行红外学习"],
         ],
-        [50, 140],
+        [48, 126],
     )
 
-    pdf.h1("11. 规格摘要")
+    # ——— 11 规格 ———
+    pdf.h1("11. 产品规格")
     pdf.table(
         ["项目", "说明"],
         [
-            ["品牌 / 设备名", "aidaegis / AC Remote"],
-            ["主控", "ESP32-S3-WROOM-1-N16（16 MB Flash）"],
-            ["显示", "1.28″ 圆屏 240×240，GC9A01 + IT7259 触摸"],
-            ["网络", "2.4 GHz Wi-Fi，Matter 本地控制"],
-            ["红外", "外接发射管 + 38 kHz 接收头"],
-            ["氛围灯", "WS2812（开关 + 亮度；模式本地）"],
-            ["可选传感", "SHT30 温湿度"],
+            ["产品名称", "aidaegis AC Remote"],
+            ["显示", "1.28 英寸圆形触摸屏"],
+            ["网络", "2.4 GHz Wi-Fi，Matter 本地智能家居控制"],
+            ["控制方式", "红外控制空调；圆屏触控；手机 App"],
+            ["氛围照明", "环形氛围灯（开关、亮度与多种模式）"],
+            ["选配传感", "温湿度传感（如已配置）"],
             ["界面语言", "中文（默认）/ 英文"],
+            ["供电", "底座后方电源接口（请使用合格电源适配器）"],
+            ["适用环境", "干燥室内桌面放置"],
         ],
-        [45, 145],
+        [40, 134],
     )
 
-    pdf.h1("12. 安全与注意")
+    # ——— 12 安全 ———
+    pdf.h1("12. 安全与注意事项")
     pdf.bullets(
         [
-            "仅在干燥室内使用，避免进水与凝露。",
-            "勿遮挡散热与红外收发窗口。",
-            "儿童使用时请在成人指导下操作配网与恢复出厂。",
-            "本说明书描述的是用户操作；固件编译烧录请参阅仓库 README（开发者文档）。",
+            "仅在干燥的室内环境使用，避免进水、凝露与高湿环境。",
+            "请勿遮挡灯环、屏幕及红外收发区域。",
+            "请使用符合当地安全标准的电源适配器与线缆。",
+            "儿童进行配网或恢复出厂等操作时，请在成人指导下进行。",
+            "请勿自行拆解设备；非专业维修可能导致损坏或安全风险。",
+            "本说明书仅描述用户日常操作；功能以设备实际表现为准。",
         ]
     )
-    pdf.ln(6)
+
+    pdf.ln(10)
+    pdf.set_draw_color(*C_LINE)
+    pdf.set_line_width(0.3)
+    pdf.line(pdf.l_margin + 40, pdf.get_y(), pdf.w - pdf.r_margin - 40, pdf.get_y())
+    pdf.ln(8)
     pdf.set_font("cn", "", 9)
-    pdf.set_text_color(100, 100, 100)
+    pdf.set_text_color(*C_MUTED)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(
         pdf.epw,
         5,
-        "文档版本与固件 3.0-s3-ui 对应。功能以实际固件为准。\n"
-        "项目主页：https://github.com/realDavy/bc7215_ac_matter",
+        "© aidaegis\n"
+        "本说明书内容如有更新，以产品随附或官网最新版本为准。\n"
+        "品牌与产品名称：aidaegis AC Remote",
         align="C",
     )
 
