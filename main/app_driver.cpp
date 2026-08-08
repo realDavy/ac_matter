@@ -39,7 +39,6 @@ using namespace esp_matter;
 
 static const char *TAG = "app_driver";
 extern uint16_t room_air_conditioner_endpoint_id;
-extern uint16_t fan_endpoint_id;
 extern uint16_t temp_light_endpoint_id;
 static const char *TAG_IR = "ir_ac_matter";
 
@@ -579,7 +578,7 @@ static int Fan = 1;
 static bool PowerOn = false;
 
 /*
- * Fan endpoint synchronization helpers.
+ * Fan Control synchronization helpers (cluster on Room AC endpoint).
  *
  * FanMode Off and PercentSetting 0% are treated as whole-appliance power-off
  * commands. With FanModeSequence OffHighAuto, IR Low/Med/High all publish as
@@ -1065,7 +1064,7 @@ static void app_matter_update_fan_endpoint_state_now(
     app_matter_log_update_error(
         "PercentCurrent",
         attribute::update(
-            fan_endpoint_id,
+            room_air_conditioner_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::PercentCurrent::Id,
             &percent_current));
@@ -1076,7 +1075,7 @@ static void app_matter_update_fan_endpoint_state_now(
     app_matter_log_update_error(
         "PercentSetting",
         attribute::update(
-            fan_endpoint_id,
+            room_air_conditioner_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::PercentSetting::Id,
             &percent_setting));
@@ -1087,7 +1086,7 @@ static void app_matter_update_fan_endpoint_state_now(
     app_matter_log_update_error(
         "FanMode",
         attribute::update(
-            fan_endpoint_id,
+            room_air_conditioner_endpoint_id,
             FanControl::Id,
             FanControl::Attributes::FanMode::Id,
             &fan_mode_val));
@@ -1097,7 +1096,7 @@ static void app_matter_update_fan_endpoint_state_now(
 
     ESP_LOGI(
         TAG,
-        "Fan endpoint synchronized: FanMode=%u Percent=%u",
+        "Fan Control synchronized: FanMode=%u Percent=%u",
         static_cast<unsigned>(matter_fan_mode),
         static_cast<unsigned>(fan_percent));
 }
@@ -2557,10 +2556,8 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                 ESP_LOGI(TAG, "Air-conditioner operating mode update received: %d", matter_mode);
             }
 		}
-	}
-	// Branch 3: handle fan speed (Fan Control cluster)
-    else if (endpoint_id == fan_endpoint_id &&
-             cluster_id == FanControl::Id) {
+        // Fan Control lives on the Room AC endpoint (not a sibling Fan EP).
+        else if (cluster_id == FanControl::Id) {
 
         if (attribute_id ==
             FanControl::Attributes::FanMode::Id) {
@@ -2721,7 +2718,8 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                     requested_percent);
             }
         }
-    }
+        }
+	}
     else if (endpoint_id == temp_light_endpoint_id) {
         if (cluster_id == OnOff::Id &&
             attribute_id == OnOff::Attributes::OnOff::Id) {
