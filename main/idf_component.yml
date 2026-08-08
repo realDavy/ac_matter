@@ -10,4 +10,4 @@ dependencies:
   lvgl/lvgl:
     version: "^9.2.0"
     public: true
-)
+
