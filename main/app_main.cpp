@@ -72,7 +72,8 @@ static bool s_chipoble_connected = false;
  */
 static bool s_pending_post_commission_ui = false;
 
-static constexpr const char *k_device_name = "AC Remote";
+/* Default Home-facing name (Basic Information NodeLabel / ProductName). */
+static constexpr const char *k_device_name = "空调";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 
 static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
@@ -140,7 +141,7 @@ static void app_ensure_serial_number()
     ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
 }
 
-/** Set default NodeLabel so controllers show "AC Remote" before the user renames it. */
+/** Set default NodeLabel so controllers show "空调" before the user renames it. */
 static void app_set_default_node_label(node_t *node)
 {
     if (node == nullptr) {
@@ -960,8 +961,8 @@ extern "C" void app_main()
 	    endpoint = app_create_bridged_endpoint(
 	        node,
 	        aggregator,
-	        "Air Conditioner",
-	        "Air Conditioner",
+	        "空调",
+	        "空调",
 	        room_air_conditioner_handle);
 	    ABORT_APP_ON_FAILURE(
 	        room_air_conditioner::add(
@@ -1002,8 +1003,8 @@ extern "C" void app_main()
 	    humidity_endpoint = app_create_bridged_endpoint(
 	        node,
 	        aggregator,
-	        "Humidity",
-	        "Humidity Sensor",
+	        "湿度",
+	        "湿度",
 	        nullptr);
 	    ABORT_APP_ON_FAILURE(
 	        humidity_sensor::add(
@@ -1039,8 +1040,8 @@ extern "C" void app_main()
 	    temp_light_endpoint = app_create_bridged_endpoint(
 	        node,
 	        aggregator,
-	        "Ambient Light",
-	        "Ambient Light",
+	        "温感氛围灯",
+	        "温感氛围灯",
 	        nullptr);
 	    ABORT_APP_ON_FAILURE(
 	        dimmable_light::add(

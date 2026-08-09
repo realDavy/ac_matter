@@ -65,5 +65,5 @@ idf_build_set_property(CXX_COMPILE_OPTIONS "-Wno-maybe-uninitialized" APPEND)
 
 # Matter Basic Information identity (Manufacturer / ProductName)
 idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME=\"aidaegis\"" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME=\"AC Remote\"" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_NAME=\"AC Remote\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME=\"空调\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_NAME=\"空调\"" APPEND)
