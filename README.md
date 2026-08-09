@@ -30,7 +30,7 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 | 模式 | 拓扑 | Home 表现 |
 |------|------|-----------|
 | **组合显示** | Root + RAC / Humidity / Light（扁平端点） | 一个配件，内含多项服务 |
-| **分开显示** | Root + Aggregator + 三个 Bridged Node | 空调 / 湿度 / 灯为独立配件 |
+| **分开显示** | Root + Aggregator + 三个 Bridged Node | 独立配件：`空调` / `湿度` / `温感氛围灯` |
 
 切换模式会写入 NVS 并重启；之后请在 Home 中**删除旧配件并重新配对**。  
 风速不通过 Matter 暴露；本机发出的红外指令固定为 **自动风速**。
