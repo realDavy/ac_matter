@@ -26,6 +26,14 @@ typedef struct {
     const char *mode_white;
     const char *brightness;
     const char *swipe_hint;
+    const char *swipe_hint_settings;
+    const char *settings_title;
+    const char *settings_subtitle;
+    const char *home_mode_combined;
+    const char *home_mode_separate;
+    const char *settings_apply;
+    const char *settings_hint;
+    const char *settings_rebooting;
     const char *lang_toggle;
 } ui_strings_t;
 
@@ -55,6 +63,14 @@ static inline const ui_strings_t *ui_strings(bool english)
         .mode_white = "呼吸白",
         .brightness = "亮度",
         .swipe_hint = "左滑灯光",
+        .swipe_hint_settings = "左滑设置",
+        .settings_title = "组件设置",
+        .settings_subtitle = "Home显示方式",
+        .home_mode_combined = "组合显示",
+        .home_mode_separate = "分开显示",
+        .settings_apply = "应用并重启",
+        .settings_hint = "切换后重启并需重新配网",
+        .settings_rebooting = "正在重启...",
         .lang_toggle = "EN",
     };
 
@@ -82,6 +98,14 @@ static inline const ui_strings_t *ui_strings(bool english)
         .mode_white = "White Breath",
         .brightness = "Brightness",
         .swipe_hint = "Swipe for light",
+        .swipe_hint_settings = "Swipe for settings",
+        .settings_title = "Settings",
+        .settings_subtitle = "Home display mode",
+        .home_mode_combined = "Combined",
+        .home_mode_separate = "Separate",
+        .settings_apply = "Apply & Reboot",
+        .settings_hint = "Reboots; re-add in Home",
+        .settings_rebooting = "Rebooting...",
         .lang_toggle = "中文",
     };
 

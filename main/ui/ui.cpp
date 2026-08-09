@@ -6,10 +6,12 @@
 #include "board_pins.h"
 #include "display_gc9a01.h"
 #include "ws2812_temp_light.h"
+#include "app_settings.h"
 
 #include <app_priv.h>
 
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_lvgl_port.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -29,6 +31,7 @@ enum class ui_screen_t : uint8_t {
     LEARN,
     AC,
     LIGHT,
+    SETTINGS,
 };
 
 static std::atomic<bool> s_english{false};
@@ -55,6 +58,16 @@ static lv_obj_t *s_mode_list = nullptr;
 static lv_obj_t *s_brightness = nullptr;
 static lv_obj_t *s_lang_btn = nullptr;
 static lv_obj_t *s_hint = nullptr;
+static lv_obj_t *s_btn_home_mode = nullptr;
+static lv_obj_t *s_btn_home_mode_label = nullptr;
+static lv_obj_t *s_btn_settings_apply = nullptr;
+static lv_obj_t *s_btn_settings_apply_label = nullptr;
+
+/* Pending selection on Settings; applied on confirm + reboot. */
+static app_home_display_mode_t s_home_mode_pending =
+    APP_HOME_DISPLAY_COMBINED;
+static std::atomic<bool> s_settings_rebooting{false};
+static TickType_t s_reboot_at_tick = 0;
 
 static uint16_t s_qr_pixels[80 * 80];
 #if LVGL_VERSION_MAJOR >= 9
@@ -210,6 +223,8 @@ static void hide_all_controls(void)
     hide(s_mode_list);
     hide(s_brightness);
     hide(s_hint);
+    hide(s_btn_home_mode);
+    hide(s_btn_settings_apply);
 }
 
 static void show_pairing(void)
@@ -301,9 +316,11 @@ static void show_light(void)
     const ui_strings_t *s = ui_strings(s_english.load());
     hide_all_controls();
     lv_label_set_text(s_title, s->light_title);
-    lv_label_set_text(s_subtitle, s->brightness);
+    lv_label_set_text(s_subtitle, s->swipe_hint_settings);
     lv_obj_clear_flag(s_mode_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_brightness, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_hint, s->brightness);
 
     const char *modes[] = {
         s->mode_night, s->mode_manual, s->mode_temp,
@@ -319,6 +336,52 @@ static void show_light(void)
     }
 
     lv_slider_set_value(s_brightness, ws2812_temp_light_get_brightness(), LV_ANIM_OFF);
+}
+
+static void refresh_settings_mode_button(void)
+{
+    const ui_strings_t *s = ui_strings(s_english.load());
+    if (!s_btn_home_mode_label) {
+        return;
+    }
+    const bool separate =
+        s_home_mode_pending == APP_HOME_DISPLAY_SEPARATE;
+    lv_label_set_text(
+        s_btn_home_mode_label,
+        separate ? s->home_mode_separate : s->home_mode_combined);
+    style_btn(s_btn_home_mode, separate ? 0x8B5A2B : 0x2F6FED);
+}
+
+static void show_settings(void)
+{
+    const ui_strings_t *s = ui_strings(s_english.load());
+    hide_all_controls();
+
+    if (!s_settings_rebooting.load()) {
+        s_home_mode_pending = app_settings_get_home_display_mode();
+    }
+
+    lv_label_set_text(s_title, s->settings_title);
+    lv_label_set_text(
+        s_subtitle,
+        s_settings_rebooting.load() ? s->settings_rebooting
+                                    : s->settings_subtitle);
+    lv_obj_clear_flag(s_btn_home_mode, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_btn_settings_apply, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(
+        s_hint,
+        s_settings_rebooting.load() ? s->settings_rebooting : s->settings_hint);
+    lv_label_set_text(s_btn_settings_apply_label, s->settings_apply);
+    refresh_settings_mode_button();
+
+    if (s_settings_rebooting.load()) {
+        lv_obj_add_state(s_btn_home_mode, LV_STATE_DISABLED);
+        lv_obj_add_state(s_btn_settings_apply, LV_STATE_DISABLED);
+    } else {
+        lv_obj_clear_state(s_btn_home_mode, LV_STATE_DISABLED);
+        lv_obj_clear_state(s_btn_settings_apply, LV_STATE_DISABLED);
+    }
 }
 
 static void sync_backlight_hold_for_screen(ui_screen_t screen)
@@ -361,6 +424,9 @@ static void apply_screen(ui_screen_t screen)
         break;
     case ui_screen_t::LIGHT:
         show_light();
+        break;
+    case ui_screen_t::SETTINGS:
+        show_settings();
         break;
     }
 
@@ -437,9 +503,52 @@ static void on_brightness(lv_event_t *e)
     app_driver_ui_set_light_brightness(level);
 }
 
+static void on_home_mode_toggle(lv_event_t *e)
+{
+    (void)e;
+    if (s_settings_rebooting.load()) {
+        return;
+    }
+    display_activity_notify();
+    s_home_mode_pending =
+        (s_home_mode_pending == APP_HOME_DISPLAY_SEPARATE)
+            ? APP_HOME_DISPLAY_COMBINED
+            : APP_HOME_DISPLAY_SEPARATE;
+    refresh_settings_mode_button();
+}
+
+static void on_settings_apply(lv_event_t *e)
+{
+    (void)e;
+    if (s_settings_rebooting.load()) {
+        return;
+    }
+    display_activity_notify();
+
+    const app_home_display_mode_t current =
+        app_settings_get_home_display_mode();
+    if (s_home_mode_pending == current) {
+        apply_screen(ui_screen_t::LIGHT);
+        return;
+    }
+
+    if (app_settings_set_home_display_mode(s_home_mode_pending) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save home display mode");
+        return;
+    }
+
+    /* ui_task paints "Rebooting..." then calls esp_restart(). */
+    s_reboot_at_tick = xTaskGetTickCount() + pdMS_TO_TICKS(800);
+    s_settings_rebooting.store(true);
+    apply_screen(ui_screen_t::SETTINGS);
+}
+
 static void on_gesture(lv_event_t *e)
 {
     (void)e;
+    if (s_settings_rebooting.load()) {
+        return;
+    }
     display_activity_notify();
 #if LVGL_VERSION_MAJOR >= 9
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
@@ -448,8 +557,12 @@ static void on_gesture(lv_event_t *e)
 #endif
     if (s_screen == ui_screen_t::AC && dir == LV_DIR_LEFT) {
         apply_screen(ui_screen_t::LIGHT);
+    } else if (s_screen == ui_screen_t::LIGHT && dir == LV_DIR_LEFT) {
+        apply_screen(ui_screen_t::SETTINGS);
     } else if (s_screen == ui_screen_t::LIGHT && dir == LV_DIR_RIGHT) {
         apply_screen(ui_screen_t::AC);
+    } else if (s_screen == ui_screen_t::SETTINGS && dir == LV_DIR_RIGHT) {
+        apply_screen(ui_screen_t::LIGHT);
     }
 }
 
@@ -542,6 +655,26 @@ static void build_ui(void)
     lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
     lv_obj_center(make_label(s_lang_btn, &ui_font_cn_16, 0xFFFFFF));
     lv_obj_add_event_cb(s_lang_btn, on_lang, LV_EVENT_CLICKED, nullptr);
+
+    s_btn_home_mode = UI_BTN_CREATE(s_root);
+    style_btn(s_btn_home_mode, 0x2F6FED);
+    lv_obj_set_size(s_btn_home_mode, 160, 48);
+    lv_obj_align(s_btn_home_mode, LV_ALIGN_CENTER, 0, -18);
+    s_btn_home_mode_label =
+        make_label(s_btn_home_mode, &ui_font_cn_16, 0xFFFFFF);
+    lv_obj_center(s_btn_home_mode_label);
+    lv_obj_add_event_cb(
+        s_btn_home_mode, on_home_mode_toggle, LV_EVENT_CLICKED, nullptr);
+
+    s_btn_settings_apply = UI_BTN_CREATE(s_root);
+    style_btn(s_btn_settings_apply, 0x1F8A5F);
+    lv_obj_set_size(s_btn_settings_apply, 160, 42);
+    lv_obj_align(s_btn_settings_apply, LV_ALIGN_CENTER, 0, 48);
+    s_btn_settings_apply_label =
+        make_label(s_btn_settings_apply, &ui_font_cn_16, 0xFFFFFF);
+    lv_obj_center(s_btn_settings_apply_label);
+    lv_obj_add_event_cb(
+        s_btn_settings_apply, on_settings_apply, LV_EVENT_CLICKED, nullptr);
 }
 
 static ui_screen_t decide_screen(void)
@@ -564,8 +697,9 @@ static ui_screen_t decide_screen(void)
     if (!app_driver_ir_is_paired()) {
         return ui_screen_t::LEARN;
     }
-    if (s_screen == ui_screen_t::LIGHT) {
-        return ui_screen_t::LIGHT;
+    if (s_screen == ui_screen_t::LIGHT ||
+        s_screen == ui_screen_t::SETTINGS) {
+        return s_screen;
     }
     return ui_screen_t::AC;
 }
@@ -577,6 +711,11 @@ static void ui_task(void *arg)
     uint32_t ticks = 0;
 
     while (!s_stop_task.load()) {
+        if (s_settings_rebooting.load() &&
+            xTaskGetTickCount() >= s_reboot_at_tick) {
+            esp_restart();
+        }
+
         if (display_is_ready() && lvgl_port_lock(50)) {
             const ui_screen_t next = decide_screen();
             if (next != last) {

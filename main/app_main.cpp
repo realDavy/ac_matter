@@ -40,6 +40,7 @@
 #include "board_i2c.h"
 #include "display_gc9a01.h"
 #include "ui.h"
+#include "app_settings.h"
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -266,6 +267,38 @@ static endpoint_t *app_create_bridged_endpoint(
              node_label,
              endpoint::get_id(endpoint));
     return endpoint;
+}
+
+static void app_configure_thermostat_limits(endpoint_t *endpoint)
+{
+    cluster_t *thermostat_cluster = cluster::get(endpoint, Thermostat::Id);
+    ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr,
+        ESP_LOGE(TAG, "Failed to get Thermostat cluster"));
+
+    /*
+     * Matter Thermostat temperatures use units of 0.01°C:
+     * 1600 = 16.00°C
+     * 3000 = 30.00°C
+     */
+    cluster::thermostat::attribute::create_abs_min_cool_setpoint_limit(
+        thermostat_cluster, 1600);
+    cluster::thermostat::attribute::create_abs_max_cool_setpoint_limit(
+        thermostat_cluster, 3000);
+    cluster::thermostat::attribute::create_min_cool_setpoint_limit(
+        thermostat_cluster, 1600);
+    cluster::thermostat::attribute::create_max_cool_setpoint_limit(
+        thermostat_cluster, 3000);
+
+    cluster::thermostat::attribute::create_abs_min_heat_setpoint_limit(
+        thermostat_cluster, 1600);
+    cluster::thermostat::attribute::create_abs_max_heat_setpoint_limit(
+        thermostat_cluster, 3000);
+    cluster::thermostat::attribute::create_min_heat_setpoint_limit(
+        thermostat_cluster, 1600);
+    cluster::thermostat::attribute::create_max_heat_setpoint_limit(
+        thermostat_cluster, 3000);
+    cluster::thermostat::attribute::create_min_setpoint_dead_band(
+        thermostat_cluster, 100); // 1.00°C
 }
 
 static uint32_t app_count_active_subscriptions_locked()
@@ -850,27 +883,32 @@ extern "C" void app_main()
     app_set_default_node_label(node);
 
     /*
-     * Bridge topology (Apple Home shows each bridged endpoint separately):
-     *   EP0 Root ("AC Remote")
-     *   EP1 Aggregator
-     *     ├─ Bridged Room Air Conditioner
-     *     ├─ Bridged Humidity Sensor
-     *     └─ Bridged Dimmable Light
+     * Home display mode (NVS, default COMBINED):
+     *   COMBINED — flat siblings on one node (one Home accessory)
+     *   SEPARATE — Aggregator + Bridged Nodes (independent Home tiles)
      *
-     * Mixing native app endpoints with bridged ones is poorly supported by
-     * Apple/Google, so every application device type is bridged.
+     * No Matter Fan / FanControl endpoint; IR fan is always Auto.
+     * Change mode on the device Settings page (reboot + re-pair required).
      */
-    aggregator::config_t aggregator_config;
-    endpoint_t *aggregator = endpoint::aggregator::create(
-        node,
-        &aggregator_config,
-        ENDPOINT_FLAG_NONE,
-        nullptr);
-    ABORT_APP_ON_FAILURE(
-        aggregator != nullptr,
-        ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
-    ESP_LOGI(TAG, "Aggregator created with endpoint_id %d",
-             endpoint::get_id(aggregator));
+    const bool separate_home_tiles =
+        app_settings_home_display_is_separate();
+    ESP_LOGI(TAG, "Home display mode: %s",
+             separate_home_tiles ? "separate (bridged)" : "combined (flat)");
+
+    endpoint_t *aggregator = nullptr;
+    if (separate_home_tiles) {
+        aggregator::config_t aggregator_config;
+        aggregator = endpoint::aggregator::create(
+            node,
+            &aggregator_config,
+            ENDPOINT_FLAG_NONE,
+            nullptr);
+        ABORT_APP_ON_FAILURE(
+            aggregator != nullptr,
+            ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
+        ESP_LOGI(TAG, "Aggregator created with endpoint_id %d",
+                 endpoint::get_id(aggregator));
+    }
 
     room_air_conditioner::config_t room_air_conditioner_config;
     room_air_conditioner_config.on_off.on_off = DEFAULT_POWER;
@@ -917,55 +955,35 @@ extern "C" void app_main()
 	    .local_temperature =
 	        DEFAULT_TARGET_TEMP_X100;
 
-	endpoint_t *endpoint = app_create_bridged_endpoint(
-	    node,
-	    aggregator,
-	    "Air Conditioner",
-	    "Air Conditioner",
-	    room_air_conditioner_handle);
-	ABORT_APP_ON_FAILURE(
-	    room_air_conditioner::add(
-	        endpoint,
-	        &room_air_conditioner_config) == ESP_OK,
-	    ESP_LOGE(TAG, "Failed to add Room Air Conditioner device type"));
+	endpoint_t *endpoint = nullptr;
+	if (separate_home_tiles) {
+	    endpoint = app_create_bridged_endpoint(
+	        node,
+	        aggregator,
+	        "Air Conditioner",
+	        "Air Conditioner",
+	        room_air_conditioner_handle);
+	    ABORT_APP_ON_FAILURE(
+	        room_air_conditioner::add(
+	            endpoint,
+	            &room_air_conditioner_config) == ESP_OK,
+	        ESP_LOGE(TAG, "Failed to add Room Air Conditioner device type"));
+	} else {
+	    endpoint = room_air_conditioner::create(
+	        node,
+	        &room_air_conditioner_config,
+	        ENDPOINT_FLAG_NONE,
+	        room_air_conditioner_handle);
+	    ABORT_APP_ON_FAILURE(
+	        endpoint != nullptr,
+	        ESP_LOGE(TAG, "Failed to create room air conditioner endpoint"));
+	}
 
     room_air_conditioner_endpoint_id = endpoint::get_id(endpoint);
-    ESP_LOGI(TAG, "Room Air Conditioner bridged endpoint_id %d",
-             room_air_conditioner_endpoint_id);
-	
-	cluster_t *thermostat_cluster = cluster::get(endpoint, Thermostat::Id);
-	ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr,
-	    ESP_LOGE(TAG, "Failed to get Thermostat cluster"));
-	
-	/*
-	 * Matter Thermostat temperatures use units of 0.01°C:
-	 * 1600 = 16.00°C
-	 * 3000 = 30.00°C
-	 */
-	cluster::thermostat::attribute::create_abs_min_cool_setpoint_limit(
-	    thermostat_cluster, 1600);
-	cluster::thermostat::attribute::create_abs_max_cool_setpoint_limit(
-	    thermostat_cluster, 3000);
-	cluster::thermostat::attribute::create_min_cool_setpoint_limit(
-	    thermostat_cluster, 1600);
-	cluster::thermostat::attribute::create_max_cool_setpoint_limit(
-	    thermostat_cluster, 3000);
-	
-	cluster::thermostat::attribute::create_abs_min_heat_setpoint_limit(
-	    thermostat_cluster, 1600);
-	cluster::thermostat::attribute::create_abs_max_heat_setpoint_limit(
-	    thermostat_cluster, 3000);
-	cluster::thermostat::attribute::create_min_heat_setpoint_limit(
-	    thermostat_cluster, 1600);
-	cluster::thermostat::attribute::create_max_heat_setpoint_limit(
-    	thermostat_cluster, 3000);
-	cluster::thermostat::attribute::create_min_setpoint_dead_band(
-	    thermostat_cluster, 100); // 1.00°C
-
-	/*
-	 * No Matter Fan / FanControl endpoint: Apple Home's composed AC fan
-	 * slider is not exposed. IR fan speed is always Auto (see app_driver).
-	 */
+    ESP_LOGI(TAG, "Room Air Conditioner endpoint_id %d (%s)",
+             room_air_conditioner_endpoint_id,
+             separate_home_tiles ? "bridged" : "flat");
+	app_configure_thermostat_limits(endpoint);
 
 	/*
 	 * Optional SHT30 ambient humidity endpoint.
@@ -979,21 +997,34 @@ extern "C" void app_main()
 	humidity_sensor_config.relative_humidity_measurement.max_measured_value =
 	    nullable<uint16_t>(10000);
 
-	endpoint_t *humidity_endpoint = app_create_bridged_endpoint(
-	    node,
-	    aggregator,
-	    "Humidity",
-	    "Humidity Sensor",
-	    nullptr);
-	ABORT_APP_ON_FAILURE(
-	    humidity_sensor::add(
-	        humidity_endpoint,
-	        &humidity_sensor_config) == ESP_OK,
-	    ESP_LOGE(TAG, "Failed to add Humidity Sensor device type"));
+	endpoint_t *humidity_endpoint = nullptr;
+	if (separate_home_tiles) {
+	    humidity_endpoint = app_create_bridged_endpoint(
+	        node,
+	        aggregator,
+	        "Humidity",
+	        "Humidity Sensor",
+	        nullptr);
+	    ABORT_APP_ON_FAILURE(
+	        humidity_sensor::add(
+	            humidity_endpoint,
+	            &humidity_sensor_config) == ESP_OK,
+	        ESP_LOGE(TAG, "Failed to add Humidity Sensor device type"));
+	} else {
+	    humidity_endpoint = humidity_sensor::create(
+	        node,
+	        &humidity_sensor_config,
+	        ENDPOINT_FLAG_NONE,
+	        nullptr);
+	    ABORT_APP_ON_FAILURE(
+	        humidity_endpoint != nullptr,
+	        ESP_LOGE(TAG, "Failed to create humidity sensor endpoint"));
+	}
 
 	humidity_sensor_endpoint_id = endpoint::get_id(humidity_endpoint);
-	ESP_LOGI(TAG, "Humidity sensor bridged endpoint_id %d",
-	         humidity_sensor_endpoint_id);
+	ESP_LOGI(TAG, "Humidity sensor endpoint_id %d (%s)",
+	         humidity_sensor_endpoint_id,
+	         separate_home_tiles ? "bridged" : "flat");
 
 	/*
 	 * WS2812 ambient light as Matter Dimmable Light:
@@ -1003,21 +1034,34 @@ extern "C" void app_main()
 	dimmable_light::config_t temp_light_config;
 	temp_light_config.on_off.on_off = true;
 	temp_light_config.level_control.current_level = 180;
-	endpoint_t *temp_light_endpoint = app_create_bridged_endpoint(
-	    node,
-	    aggregator,
-	    "Ambient Light",
-	    "Ambient Light",
-	    nullptr);
-	ABORT_APP_ON_FAILURE(
-	    dimmable_light::add(
-	        temp_light_endpoint,
-	        &temp_light_config) == ESP_OK,
-	    ESP_LOGE(TAG, "Failed to add Dimmable Light device type"));
+	endpoint_t *temp_light_endpoint = nullptr;
+	if (separate_home_tiles) {
+	    temp_light_endpoint = app_create_bridged_endpoint(
+	        node,
+	        aggregator,
+	        "Ambient Light",
+	        "Ambient Light",
+	        nullptr);
+	    ABORT_APP_ON_FAILURE(
+	        dimmable_light::add(
+	            temp_light_endpoint,
+	            &temp_light_config) == ESP_OK,
+	        ESP_LOGE(TAG, "Failed to add Dimmable Light device type"));
+	} else {
+	    temp_light_endpoint = dimmable_light::create(
+	        node,
+	        &temp_light_config,
+	        ENDPOINT_FLAG_NONE,
+	        nullptr);
+	    ABORT_APP_ON_FAILURE(
+	        temp_light_endpoint != nullptr,
+	        ESP_LOGE(TAG, "Failed to create dimmable light endpoint"));
+	}
 
 	temp_light_endpoint_id = endpoint::get_id(temp_light_endpoint);
-	ESP_LOGI(TAG, "Ambient dimmable light bridged endpoint_id %d",
-	         temp_light_endpoint_id);
+	ESP_LOGI(TAG, "Ambient dimmable light endpoint_id %d (%s)",
+	         temp_light_endpoint_id,
+	         separate_home_tiles ? "bridged" : "flat");
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
     /* Set OpenThread platform config */

@@ -18,9 +18,10 @@ CONFIG_PARTITION_TABLE_OFFSET=0xC000
 # Chip shell costs RAM during BLE PASE; enable locally if needed for debug
 CONFIG_ENABLE_CHIP_SHELL=n
 
-# Dynamic endpoints: Root + Aggregator + bridged RAC + Humidity + Light.
-# Must be > app endpoints alone — root/node also consumes a slot; 4 is too low
-# and causes boot-loop creating later endpoints + abort().
+# Dynamic endpoints (combined or separate Home display):
+#   combined: Root + RAC + Humidity + Light
+#   separate: Root + Aggregator + 3 bridged endpoints
+# Root also consumes a slot; 4 is too low and aborts on later endpoints.
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=8
 
 #enable lwIP route hooks
