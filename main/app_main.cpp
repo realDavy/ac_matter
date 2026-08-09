@@ -12,8 +12,10 @@
 #include <esp_mac.h>
 #include <esp_random.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <nvs_flash.h>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 
@@ -71,6 +73,12 @@ static bool s_chipoble_connected = false;
  * 20-line draw buffer fails.
  */
 static bool s_pending_post_commission_ui = false;
+/* Wi-Fi modem sleep disabled while Matter ConnectNetwork races CHIPoBLE. */
+static bool s_wifi_ps_boost_active = false;
+static bool s_ws2812_started = false;
+static bool s_ws2812_paused_for_commission = false;
+/* Monotonic stamp for commissioning-stage timing logs. */
+static int64_t s_commission_t0_us = 0;
 
 /* Default Home-facing name (Basic Information NodeLabel / ProductName). */
 static constexpr const char *k_device_name = "空调";
@@ -84,9 +92,13 @@ static void app_start_display_ui(void);
 static void app_start_pairing_display(void);
 static void app_suspend_display_for_pase(void);
 static void app_start_sht30(void);
+static void app_start_ws2812(void);
 static void app_start_ui_peripherals(void);
 static void app_request_post_commission_ui(void);
 static void app_try_start_pending_post_commission_ui(void);
+static void app_prepare_rf_for_connect_network(const char *stage);
+static void app_restore_rf_after_commission(const char *stage);
+static void app_log_commission_stage(const char *stage);
 
 static void app_schedule_work(chip::DeviceLayer::AsyncWorkFunct work,
                               intptr_t arg = 0)
@@ -385,21 +397,97 @@ public:
 
 static AppSubscriptionCallback s_subscription_callback;
 
+static void app_log_commission_stage(const char *stage)
+{
+    const int64_t now_us = esp_timer_get_time();
+    if (s_commission_t0_us == 0) {
+        s_commission_t0_us = now_us;
+    }
+    const int64_t elapsed_ms = (now_us - s_commission_t0_us) / 1000;
+    ESP_LOGI(TAG,
+             "Commission stage [%s] +%" PRId64 " ms (heap=%u ble=%d)",
+             stage,
+             elapsed_ms,
+             static_cast<unsigned>(esp_get_free_heap_size()),
+             s_chipoble_connected ? 1 : 0);
+}
+
+/*
+ * iPhone Matter commissioning keeps CHIPoBLE open during ConnectNetwork.
+ * Bias RF to Wi-Fi early, disable modem sleep, and pause the WS2812 RMT
+ * animator so scan/auth is less likely to stall on coexist retries.
+ */
+static void app_prepare_rf_for_connect_network(const char *stage)
+{
+    app_log_commission_stage(stage);
+
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
+    esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+#endif
+
+    if (!s_wifi_ps_boost_active) {
+        esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (ps_err == ESP_OK) {
+            s_wifi_ps_boost_active = true;
+            ESP_LOGI(TAG, "Wi-Fi PS disabled for ConnectNetwork");
+        } else if (ps_err != ESP_ERR_WIFI_NOT_INIT) {
+            ESP_LOGW(TAG, "esp_wifi_set_ps(NONE) failed: %s",
+                     esp_err_to_name(ps_err));
+        }
+    }
+
+    if (ws2812_temp_light_is_ready() && ws2812_temp_light_is_enabled()) {
+        ws2812_temp_light_set_enabled(false);
+        s_ws2812_paused_for_commission = true;
+        ESP_LOGI(TAG, "Paused WS2812 during commissioning");
+    }
+}
+
+static void app_restore_rf_after_commission(const char *stage)
+{
+    app_log_commission_stage(stage);
+
+    if (s_wifi_ps_boost_active) {
+        esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        if (ps_err == ESP_OK) {
+            s_wifi_ps_boost_active = false;
+            ESP_LOGI(TAG, "Wi-Fi PS restored to MIN_MODEM");
+        } else if (ps_err != ESP_ERR_WIFI_NOT_INIT) {
+            ESP_LOGW(TAG, "esp_wifi_set_ps(MIN_MODEM) failed: %s",
+                     esp_err_to_name(ps_err));
+        } else {
+            s_wifi_ps_boost_active = false;
+        }
+    }
+
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
+    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+#endif
+
+    if (s_ws2812_paused_for_commission && ws2812_temp_light_is_ready()) {
+        ws2812_temp_light_set_enabled(true);
+        s_ws2812_paused_for_commission = false;
+    }
+}
+
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
         ESP_LOGI(TAG, "Interface IP Address changed");
+        app_log_commission_stage("ip-changed");
 		app_driver_update_led_states();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionEstablished:
         ESP_LOGI(TAG, "CHIPoBLE connection established");
         s_chipoble_connected = true;
+        s_commission_t0_us = esp_timer_get_time();
         /*
-         * Subscribe arrives just before PBKDF/PASE. Replace QR with "配对中..."
-         * then free LVGL heap; the panel keeps that text frame on-screen.
+         * Prefer Wi-Fi before ConnectNetwork credentials arrive. Then replace
+         * QR with "配对中..." and free LVGL heap for PBKDF/PASE.
          */
+        app_prepare_rf_for_connect_network("ble-up");
         if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
             app_suspend_display_for_pase();
         }
@@ -408,9 +496,11 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionClosed:
         ESP_LOGI(TAG, "CHIPoBLE connection closed");
         s_chipoble_connected = false;
+        app_log_commission_stage("ble-down");
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
                 !s_commissioning_in_progress) {
+                app_restore_rf_after_commission("ble-down-uncommissioned");
                 app_start_pairing_display();
             } else {
                 /* BLE heap is back; safe to bring up the normal UI. */
@@ -422,6 +512,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
 		s_commissioning_in_progress = false;
+        app_restore_rf_after_commission("complete");
 		app_driver_update_led_states();
         /* Restore normal UI (not pairing QR) after BLE releases heap. */
         app_schedule_work([](intptr_t /*arg*/) { app_request_post_commission_ui(); });
@@ -430,6 +521,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
         ESP_LOGI(TAG, "Commissioning failed, fail safe timer expired");
         s_commissioning_in_progress = false;
+        app_restore_rf_after_commission("fail-safe");
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
                 app_start_pairing_display();
@@ -440,6 +532,10 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
         ESP_LOGI(TAG, "Commissioning session started");
 		s_commissioning_in_progress = true;
+        if (s_commission_t0_us == 0) {
+            s_commission_t0_us = esp_timer_get_time();
+        }
+        app_prepare_rf_for_connect_network("session-start");
 		app_driver_update_led_states();
         /* Backup: free display if BLE-subscribe suspend did not run. */
         app_suspend_display_for_pase();
@@ -448,9 +544,11 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
         ESP_LOGI(TAG, "Commissioning session stopped");
         s_commissioning_in_progress = false;
+        app_log_commission_stage("session-stop");
         /* Failed session → pairing QR; success → resume deferred normal UI. */
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                app_restore_rf_after_commission("session-stop-failed");
                 app_start_pairing_display();
             } else {
                 app_try_start_pending_post_commission_ui();
@@ -750,11 +848,31 @@ static void app_start_sht30(void)
     }
 }
 
+static void app_start_ws2812(void)
+{
+    if (s_ws2812_started) {
+        return;
+    }
+
+    esp_err_t err = ws2812_temp_light_init();
+    if (err == ESP_OK) {
+        s_ws2812_started = true;
+        ws2812_temp_light_set_enabled(true);
+        ws2812_temp_light_set_brightness(180);
+        ws2812_temp_light_set_mode(WS2812_MODE_TEMP_BREATH);
+        ESP_LOGI(TAG, "WS2812 ambient light ready");
+    } else {
+        ESP_LOGW(TAG, "WS2812 indicator not available (%s)",
+                 esp_err_to_name(err));
+    }
+}
+
 /* Full post-commission bring-up: normal LCD/UI (again if suspended) + SHT30. */
 static void app_start_ui_peripherals(void)
 {
-    ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
+    ESP_LOGI(TAG, "Starting LCD/SHT30/WS2812 peripherals (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
+    app_start_ws2812();
     app_start_display_ui();
     app_start_sht30();
 }
@@ -843,14 +961,13 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
                  static_cast<unsigned>(ev->reason),
                  ev->ssid_len, reinterpret_cast<const char *>(ev->ssid),
                  static_cast<int>(ev->rssi));
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
-        /* Prefer Wi-Fi while Matter still holds CHIPoBLE open for ConnectNetwork. */
-        esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
-#endif
+        if (s_commissioning_in_progress || s_chipoble_connected) {
+            app_prepare_rf_for_connect_network("wifi-disconnect");
+        }
     } else if (event_id == WIFI_EVENT_STA_START) {
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
-        esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
-#endif
+        if (s_commissioning_in_progress || s_chipoble_connected) {
+            app_prepare_rf_for_connect_network("wifi-start");
+        }
     } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
         const auto *ev =
             static_cast<const wifi_event_sta_connected_t *>(event_data);
@@ -858,6 +975,7 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
                  ev->ssid_len, reinterpret_cast<const char *>(ev->ssid),
                  static_cast<unsigned>(ev->channel),
                  static_cast<unsigned>(ev->authmode));
+        app_log_commission_stage("wifi-connected");
     }
 }
 
@@ -1119,22 +1237,9 @@ extern "C" void app_main()
     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);
 
 	/*
-	 * WS2812 temperature indicator (independent of SHT30 presence so On/Off
-	 * still works; color follows sensor readings when available).
-	 */
-	err = ws2812_temp_light_init();
-	if (err == ESP_OK) {
-	    ws2812_temp_light_set_enabled(temp_light_config.on_off.on_off);
-	    ws2812_temp_light_set_brightness(180);
-	    ws2812_temp_light_set_mode(WS2812_MODE_TEMP_BREATH);
-	} else {
-	    ESP_LOGW(TAG, "WS2812 indicator not available (%s)", esp_err_to_name(err));
-	}
-
-	/*
-	 * Uncommissioned: show pairing QR on LCD now. LVGL is suspended when the
-	 * commissioning session starts so BLE PASE still has enough heap.
-	 * SHT30 waits until a fabric exists.
+	 * Uncommissioned: show pairing QR only. Defer WS2812/SHT30 until after
+	 * first fabric so ConnectNetwork does not compete with RMT/I2C traffic.
+	 * LVGL is suspended when CHIPoBLE connects so PASE still has enough heap.
 	 */
 	if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
 	    app_start_ui_peripherals();
