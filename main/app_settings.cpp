@@ -8,6 +8,8 @@ static const char *TAG = "app_settings";
 static constexpr char kNs[] = "ui_pref";
 static constexpr char kHomeDispKey[] = "home_disp";
 
+extern "C" {
+
 app_home_display_mode_t app_settings_get_home_display_mode(void)
 {
     nvs_handle_t handle = 0;
@@ -61,3 +63,5 @@ esp_err_t app_settings_set_home_display_mode(app_home_display_mode_t mode)
              value == APP_HOME_DISPLAY_SEPARATE ? "separate" : "combined");
     return ESP_OK;
 }
+
+} // extern "C"
