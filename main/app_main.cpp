@@ -82,7 +82,7 @@ static bool s_ws2812_paused_for_commission = false;
 static int64_t s_commission_t0_us = 0;
 
 /* Default Home-facing name (Basic Information NodeLabel / ProductName). */
-static constexpr const char *k_device_name = "空调伴侣";
+static constexpr const char *k_device_name = "空调";
 static constexpr const char *k_light_name = "温感氛围灯";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 

@@ -18,7 +18,7 @@
 | Matter 空调控制 | 开关、制冷/制热、整度设定温度；风速固定为自动（不在 Home 显示风速控件） |
 | 灯光页 | 空调页左滑进入；夜间关闭 / 手动 / 温感呼吸（默认）/ 纯色 / 彩虹 / 呼吸白 |
 | Matter 灯光 | **On/Off + 亮度（LevelControl）**；氛围模式仅屏上选（方案 A） |
-| 设备身份 | Manufacturer=`aidaegis`；默认配件名=空调伴侣 / 温感氛围灯（分开显示时）；序列号随机生成并以 MAC 后四位结尾 |
+| 设备身份 | Manufacturer=`aidaegis`；默认配件名=空调 / 温感氛围灯（分开显示时）；序列号随机生成并以 MAC 后四位结尾 |
 | SHT30（可选） | 真实室温写入 Thermostat `LocalTemperature`；湿度独立 Humidity Sensor 端点 |
 | 状态 LED | GPIO11，表示配对/配网/待机等状态 |
 | BOOT 键 | **双击** Alt 遍历协议；**长按 ~5s** 恢复出厂 |
@@ -30,7 +30,7 @@ Matter 端点（动态，需 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8`�
 | 模式 | 拓扑 | Home 表现 |
 |------|------|-----------|
 | **组合显示** | Root + RAC / Humidity / Light（扁平端点） | 一个配件，内含多项服务 |
-| **分开显示** | Root + Aggregator + 三个 Bridged Node | 独立配件：`空调伴侣` / `湿度` / `温感氛围灯` |
+| **分开显示** | Root + Aggregator + 三个 Bridged Node | 独立配件：`空调` / `湿度` / `温感氛围灯` |
 
 切换模式会写入 NVS 并重启；之后请在 Home 中**删除旧配件并重新配对**。  
 风速不通过 Matter 暴露；本机发出的红外指令固定为 **自动风速**。
@@ -257,7 +257,7 @@ idf.py set-target esp32s3
 | SHT30 / 触摸 I2C | menuconfig → **SHT30…** 或 `board_pins.h` | SDA=8 / SCL=9 / ADDR=0x44 |
 | WS2812 DIN | menuconfig → **WS2812…** | GPIO10 |
 | 动态端点数 | `sdkconfig.defaults` → `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` | **8** |
-| Manufacturer / 设备名 | `main/CHIPProjectConfig.h`、`CMakeLists.txt` | `aidaegis` / `空调伴侣`（灯=`温感氛围灯`） |
+| Manufacturer / 设备名 | `main/CHIPProjectConfig.h`、`CMakeLists.txt` | `aidaegis` / `空调`（灯=`温感氛围灯`） |
 | 序列号 | 运行时写入 chip-factory（`serial-num`） | 随机 8 位 + MAC 后 4 位 |
 | Flash / 分区 | `sdkconfig.defaults`、`partitions.csv` | 16 MB，OTA 双区各约 6 MB |
 
@@ -297,7 +297,7 @@ python3 scripts/gen_user_manual_pdf.py
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | Manufacturer（VendorName） | `aidaegis` | Matter Basic Information |
-| 设备名（ProductName / NodeLabel） | `空调伴侣`；分开显示时灯为 `温感氛围灯` | 手机里显示的名称；用户可在 App 中改名 |
+| 设备名（ProductName / NodeLabel） | `空调`；分开显示时灯为 `温感氛围灯` | 手机里显示的名称；用户可在 App 中改名 |
 | SerialNumber | `RRRRRRRRMMMM` | 首次启动生成：8 位随机十六进制 + Wi‑Fi STA MAC 后 4 位；写入 `chip-factory` NVS 后固定 |
 
 串口日志会出现 `Generated SerialNumber: ...`（首次）或 `SerialNumber: ...`（后续启动）。若需重新生成序列号，需擦除 flash / 清除 factory 区后再烧录。
