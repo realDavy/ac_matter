@@ -97,17 +97,9 @@ def make_screen(size: int, kind: str) -> Image.Image:
     def F(frac: float) -> int:
         return max(10, int(sR * frac))
 
-    def draw_lang_toggle() -> None:
-        pill_w, pill_h = int(sR * 0.34), int(sR * 0.18)
-        px1 = cx + int(sR * 0.52) - pill_w // 2
-        py1 = cy - int(sR * 0.62) - pill_h // 2
-        rounded(d, [px1, py1, px1 + pill_w, py1 + pill_h], pill_h // 2, (58, 74, 88))
-        text_center(
-            d, (px1 + pill_w / 2, py1 + pill_h / 2), "EN", font(F(0.14)), (255, 255, 255)
         )
 
     if kind == "pairing":
-        draw_lang_toggle()
         text_center(d, (cx - int(sR * 0.12), cy - int(sR * 0.72)), "Matter 配网", font(F(0.20)), (232, 241, 248))
         text_center(
             d, (cx, cy - int(sR * 0.50)), "请扫码或输入配对码", font(F(0.12)), (155, 180, 196)
@@ -125,7 +117,6 @@ def make_screen(size: int, kind: str) -> Image.Image:
         text_center(d, (cx, cy + int(sR * 0.72)), "34970112345", font(F(0.12)), (208, 228, 240))
 
     elif kind == "learn":
-        draw_lang_toggle()
         text_center(d, (cx, cy - int(sR * 0.45)), "红外学习", font(F(0.22)), (232, 241, 248))
         text_center(
             d, (cx, cy - int(sR * 0.10)), "对准遥控按任意键", font(F(0.14)), (155, 180, 196)
@@ -136,7 +127,6 @@ def make_screen(size: int, kind: str) -> Image.Image:
         text_center(d, (cx, by + bh / 2), "开始学习", font(F(0.16)), (255, 255, 255))
 
     elif kind == "ac":
-        draw_lang_toggle()
         text_center(d, (cx, cy - int(sR * 0.68)), "空调", font(F(0.20)), (232, 241, 248))
         text_center(d, (cx, cy - int(sR * 0.44)), "左滑灯光", font(F(0.12)), (155, 180, 196))
         text_center(d, (cx, cy - int(sR * 0.04)), "25°", font(F(0.38)), (242, 247, 250))
@@ -158,13 +148,12 @@ def make_screen(size: int, kind: str) -> Image.Image:
         )
 
     elif kind == "ac_off":
-        # Clean product appearance — no lang toggle / no perimeter arc.
+        # Clean product appearance — no perimeter arc.
         text_center(d, (cx, cy - int(sR * 0.38)), "空调", font(F(0.18)), (232, 241, 248))
         text_center(d, (cx, cy - int(sR * 0.08)), "当前 24°", font(F(0.14)), (155, 180, 196))
         text_center(d, (cx, cy + int(sR * 0.26)), "关闭", font(F(0.26)), (242, 247, 250))
 
     elif kind == "light":
-        draw_lang_toggle()
         text_center(d, (cx - int(sR * 0.10), cy - int(sR * 0.72)), "氛围灯光", font(F(0.18)), (232, 241, 248))
         text_center(d, (cx, cy - int(sR * 0.52)), "亮度", font(F(0.12)), (155, 180, 196))
         modes = ["夜间关闭", "手动亮度", "温感呼吸", "纯色", "彩虹", "呼吸白"]
