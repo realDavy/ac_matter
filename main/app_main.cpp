@@ -471,6 +471,8 @@ static void app_set_fast_wifi_scan_params(bool enable)
              enable ? "on" : "off");
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
+    /* Field-wise init: WIFI_SCAN_PARAMS_DEFAULT_CONFIG() is a C designated
+     * initializer and cannot be used as a C++ assignment expression. */
     wifi_scan_default_params_t scan_params = {};
     if (enable) {
         scan_params.scan_time.active.min = 0;
@@ -478,14 +480,10 @@ static void app_set_fast_wifi_scan_params(bool enable)
         scan_params.scan_time.passive = 120;
         scan_params.home_chan_dwell_time = 30;
     } else {
-#if defined(WIFI_SCAN_PARAMS_DEFAULT_CONFIG)
-        scan_params = WIFI_SCAN_PARAMS_DEFAULT_CONFIG();
-#else
         scan_params.scan_time.active.min = 0;
         scan_params.scan_time.active.max = 120;
         scan_params.scan_time.passive = 360;
         scan_params.home_chan_dwell_time = 30;
-#endif
     }
 
     esp_err_t err = esp_wifi_set_scan_parameters(&scan_params);
