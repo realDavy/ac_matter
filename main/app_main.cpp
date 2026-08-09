@@ -8,6 +8,7 @@
 
 #include <esp_err.h>
 #include <esp_event.h>
+#include <esp_idf_version.h>
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_random.h>
@@ -81,7 +82,8 @@ static bool s_ws2812_paused_for_commission = false;
 static int64_t s_commission_t0_us = 0;
 
 /* Default Home-facing name (Basic Information NodeLabel / ProductName). */
-static constexpr const char *k_device_name = "空调";
+static constexpr const char *k_device_name = "空调伴侣";
+static constexpr const char *k_light_name = "感温氛围灯";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 
 static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
@@ -153,7 +155,46 @@ static void app_ensure_serial_number()
     ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
 }
 
-/** Set default NodeLabel so controllers show "空调" before the user renames it. */
+/**
+ * Force ProductName / NodeLabel to the product defaults.
+ * Older builds left a non-empty NodeLabel in NVS ("空调" / English defaults),
+ * so "already set; leave unchanged" prevented the Home-facing rename.
+ */
+static void app_set_basic_char_attr(cluster_t *basic, uint32_t attr_id,
+                                    const char *value, const char *attr_name)
+{
+    attribute_t *attr = attribute::get(basic, attr_id);
+    if (attr == nullptr) {
+        ESP_LOGW(TAG, "%s attribute missing", attr_name);
+        return;
+    }
+
+    const size_t want_len = std::strlen(value);
+    esp_matter_attr_val_t current = {};
+    if (attribute::get_val(attr, &current) == ESP_OK &&
+        current.type == ESP_MATTER_VAL_TYPE_CHAR_STRING &&
+        current.val.a.s == want_len &&
+        current.val.a.b != nullptr &&
+        std::memcmp(current.val.a.b, value, want_len) == 0) {
+        ESP_LOGI(TAG, "%s already \"%s\"", attr_name, value);
+        return;
+    }
+
+    char name[32];
+    std::strncpy(name, value, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+
+    esp_matter_attr_val_t val =
+        esp_matter_char_str(name, static_cast<uint16_t>(std::strlen(name)));
+    esp_err_t set_err = attribute::set_val(attr, &val);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set %s, err=%d", attr_name, set_err);
+        return;
+    }
+
+    ESP_LOGI(TAG, "%s set to \"%s\"", attr_name, name);
+}
+
 static void app_set_default_node_label(node_t *node)
 {
     if (node == nullptr) {
@@ -172,33 +213,10 @@ static void app_set_default_node_label(node_t *node)
         return;
     }
 
-    attribute_t *node_label =
-        attribute::get(basic, BasicInformation::Attributes::NodeLabel::Id);
-    if (node_label == nullptr) {
-        ESP_LOGE(TAG, "NodeLabel attribute missing");
-        return;
-    }
-
-    esp_matter_attr_val_t current = {};
-    if (attribute::get_val(node_label, &current) == ESP_OK &&
-        current.val.a.s > 0) {
-        ESP_LOGI(TAG, "NodeLabel already set; leaving unchanged");
-        return;
-    }
-
-    char name[32];
-    std::strncpy(name, k_device_name, sizeof(name) - 1);
-    name[sizeof(name) - 1] = '\0';
-
-    esp_matter_attr_val_t val =
-        esp_matter_char_str(name, static_cast<uint16_t>(std::strlen(name)));
-    esp_err_t set_err = attribute::set_val(node_label, &val);
-    if (set_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set NodeLabel, err=%d", set_err);
-        return;
-    }
-
-    ESP_LOGI(TAG, "NodeLabel set to \"%s\"", name);
+    app_set_basic_char_attr(basic, BasicInformation::Attributes::ProductName::Id,
+                            k_device_name, "ProductName");
+    app_set_basic_char_attr(basic, BasicInformation::Attributes::NodeLabel::Id,
+                            k_device_name, "NodeLabel");
 }
 
 /*
@@ -413,9 +431,78 @@ static void app_log_commission_stage(const char *stage)
 }
 
 /*
+ * CHIP's empty-SSID ScanNetworks calls esp_wifi_scan_start(nullptr) → default
+ * 120ms/channel. During CHIPoBLE coexist that stretches to ~5s on CN (1–13).
+ * We wrap scan_start and optionally set IDF≥5.3 defaults so active max≈50ms.
+ */
+static std::atomic<bool> s_fast_wifi_scan{false};
+
+extern "C" esp_err_t __real_esp_wifi_scan_start(const wifi_scan_config_t *config,
+                                                bool block);
+
+extern "C" esp_err_t __wrap_esp_wifi_scan_start(const wifi_scan_config_t *config,
+                                                bool block)
+{
+    if (!s_fast_wifi_scan.load(std::memory_order_relaxed)) {
+        return __real_esp_wifi_scan_start(config, block);
+    }
+
+    wifi_scan_config_t fast = {};
+    if (config != nullptr) {
+        fast = *config;
+    } else {
+        fast.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+        fast.show_hidden = false;
+    }
+
+    /* Only override when the caller left active dwell at the default (0/0). */
+    if (fast.scan_time.active.min == 0 && fast.scan_time.active.max == 0) {
+        fast.scan_time.active.min = 0;
+        fast.scan_time.active.max = 50;
+    }
+
+    return __real_esp_wifi_scan_start(&fast, block);
+}
+
+static void app_set_fast_wifi_scan_params(bool enable)
+{
+    s_fast_wifi_scan.store(enable, std::memory_order_relaxed);
+    ESP_LOGI(TAG, "Wi-Fi fast-scan wrap %s (active max=50 ms when default)",
+             enable ? "on" : "off");
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
+    wifi_scan_default_params_t scan_params = {};
+    if (enable) {
+        scan_params.scan_time.active.min = 0;
+        scan_params.scan_time.active.max = 50;
+        scan_params.scan_time.passive = 120;
+        scan_params.home_chan_dwell_time = 30;
+    } else {
+#if defined(WIFI_SCAN_PARAMS_DEFAULT_CONFIG)
+        scan_params = WIFI_SCAN_PARAMS_DEFAULT_CONFIG();
+#else
+        scan_params.scan_time.active.min = 0;
+        scan_params.scan_time.active.max = 120;
+        scan_params.scan_time.passive = 360;
+        scan_params.home_chan_dwell_time = 30;
+#endif
+    }
+
+    esp_err_t err = esp_wifi_set_scan_parameters(&scan_params);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Wi-Fi scan defaults updated (IDF set_scan_parameters)");
+    } else if (err != ESP_ERR_WIFI_NOT_INIT) {
+        ESP_LOGW(TAG, "esp_wifi_set_scan_parameters failed: %s",
+                 esp_err_to_name(err));
+    }
+#endif
+}
+
+/*
  * iPhone Matter commissioning keeps CHIPoBLE open during ConnectNetwork.
- * Bias RF to Wi-Fi early, disable modem sleep, and pause the WS2812 RMT
- * animator so scan/auth is less likely to stall on coexist retries.
+ * Bias RF to Wi-Fi early, disable modem sleep, shorten Wi-Fi scan dwell, and
+ * pause the WS2812 RMT animator so scan/auth is less likely to stall on
+ * coexist retries.
  */
 static void app_prepare_rf_for_connect_network(const char *stage)
 {
@@ -436,6 +523,8 @@ static void app_prepare_rf_for_connect_network(const char *stage)
         }
     }
 
+    app_set_fast_wifi_scan_params(true);
+
     if (ws2812_temp_light_is_ready() && ws2812_temp_light_is_enabled()) {
         ws2812_temp_light_set_enabled(false);
         s_ws2812_paused_for_commission = true;
@@ -446,6 +535,8 @@ static void app_prepare_rf_for_connect_network(const char *stage)
 static void app_restore_rf_after_commission(const char *stage)
 {
     app_log_commission_stage(stage);
+
+    app_set_fast_wifi_scan_params(false);
 
     if (s_wifi_ps_boost_active) {
         esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
@@ -1079,8 +1170,8 @@ extern "C" void app_main()
 	    endpoint = app_create_bridged_endpoint(
 	        node,
 	        aggregator,
-	        "空调",
-	        "空调",
+	        k_device_name,
+	        k_device_name,
 	        room_air_conditioner_handle);
 	    ABORT_APP_ON_FAILURE(
 	        room_air_conditioner::add(
@@ -1158,8 +1249,8 @@ extern "C" void app_main()
 	    temp_light_endpoint = app_create_bridged_endpoint(
 	        node,
 	        aggregator,
-	        "温感氛围灯",
-	        "温感氛围灯",
+	        k_light_name,
+	        k_light_name,
 	        nullptr);
 	    ABORT_APP_ON_FAILURE(
 	        dimmable_light::add(
