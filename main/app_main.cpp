@@ -83,7 +83,7 @@ static int64_t s_commission_t0_us = 0;
 
 /* Default Home-facing name (Basic Information NodeLabel / ProductName). */
 static constexpr const char *k_device_name = "空调伴侣";
-static constexpr const char *k_light_name = "感温氛围灯";
+static constexpr const char *k_light_name = "温感氛围灯";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 
 static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
