@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdbool.h>
-
 typedef struct {
     const char *pairing_title;
     const char *pairing_hint;
@@ -34,10 +32,9 @@ typedef struct {
     const char *settings_apply;
     const char *settings_hint;
     const char *settings_rebooting;
-    const char *lang_toggle;
 } ui_strings_t;
 
-static inline const ui_strings_t *ui_strings(bool english)
+static inline const ui_strings_t *ui_strings(void)
 {
     static const ui_strings_t zh = {
         .pairing_title = "Matter 配网",
@@ -71,43 +68,7 @@ static inline const ui_strings_t *ui_strings(bool english)
         .settings_apply = "应用并重启",
         .settings_hint = "切换后重启并需重新配网",
         .settings_rebooting = "正在重启...",
-        .lang_toggle = "EN",
     };
 
-    static const ui_strings_t en = {
-        .pairing_title = "Matter Setup",
-        .pairing_hint = "Scan QR or enter code",
-        .pairing_busy_title = "Pairing...",
-        .pairing_busy_hint = "Finish setup on your phone",
-        .manual_code = "Setup Code",
-        .learn_title = "IR Learn",
-        .learn_hint = "Aim remote, press any key",
-        .learn_btn = "Start Learn",
-        .ac_title = "Air Conditioner",
-        .power_on = "On",
-        .power_off = "Off",
-        .cool_down = "Cooler",
-        .heat_up = "Warmer",
-        .light_page = "Light",
-        .light_title = "Ambient Light",
-        .mode_night = "Night Off",
-        .mode_manual = "Manual",
-        .mode_temp = "Temp Breath",
-        .mode_solid = "Solid",
-        .mode_rainbow = "Rainbow",
-        .mode_white = "White Breath",
-        .brightness = "Brightness",
-        .swipe_hint = "Swipe for light",
-        .swipe_hint_settings = "Swipe for settings",
-        .settings_title = "Settings",
-        .settings_subtitle = "Home display mode",
-        .home_mode_combined = "Combined",
-        .home_mode_separate = "Separate",
-        .settings_apply = "Apply & Reboot",
-        .settings_hint = "Reboots; re-add in Home",
-        .settings_rebooting = "Rebooting...",
-        .lang_toggle = "中文",
-    };
-
-    return english ? &en : &zh;
+    return &zh;
 }

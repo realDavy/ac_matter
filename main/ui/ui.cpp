@@ -34,7 +34,6 @@ enum class ui_screen_t : uint8_t {
     SETTINGS,
 };
 
-static std::atomic<bool> s_english{false};
 static std::atomic<bool> s_ready{false};
 static std::atomic<bool> s_stop_task{false};
 static std::atomic<bool> s_pairing_busy{false};
@@ -56,7 +55,6 @@ static lv_obj_t *s_btn_up = nullptr;
 static lv_obj_t *s_temp_label = nullptr;
 static lv_obj_t *s_mode_list = nullptr;
 static lv_obj_t *s_brightness = nullptr;
-static lv_obj_t *s_lang_btn = nullptr;
 static lv_obj_t *s_hint = nullptr;
 static lv_obj_t *s_btn_home_mode = nullptr;
 static lv_obj_t *s_btn_home_mode_label = nullptr;
@@ -229,7 +227,7 @@ static void hide_all_controls(void)
 
 static void show_pairing(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
     refresh_onboarding_codes();
     draw_qr(s_qr_text);
@@ -238,9 +236,6 @@ static void show_pairing(void)
     lv_label_set_text(s_subtitle, s->pairing_hint);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
-    if (s_lang_btn) {
-        lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
-    }
 
     char line[64];
     std::snprintf(line, sizeof(line), "%s\n%s", s->manual_code, s_manual_code);
@@ -249,13 +244,8 @@ static void show_pairing(void)
 
 static void show_pairing_busy(void)
 {
-    /* Use the language selected on the pairing screen (EN / 中文). */
-    const bool english = s_english.load();
-    const ui_strings_t *s = ui_strings(english);
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
-    if (s_lang_btn) {
-        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
-    }
     lv_label_set_text(s_title, s->pairing_busy_title);
     lv_label_set_text(s_subtitle, s->pairing_busy_hint);
     if (s_qr_img) {
@@ -269,7 +259,7 @@ static void show_pairing_busy(void)
 
 static void show_learn(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
     lv_label_set_text(s_title, s->learn_title);
     lv_label_set_text(s_subtitle, s->learn_hint);
@@ -280,7 +270,7 @@ static void show_learn(void)
 
 static void show_ac(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
 
     int temp = 25;
@@ -313,7 +303,7 @@ static void show_ac(void)
 
 static void show_light(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
     lv_label_set_text(s_title, s->light_title);
     lv_label_set_text(s_subtitle, s->swipe_hint_settings);
@@ -340,7 +330,7 @@ static void show_light(void)
 
 static void refresh_settings_mode_button(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     if (!s_btn_home_mode_label) {
         return;
     }
@@ -354,7 +344,7 @@ static void refresh_settings_mode_button(void)
 
 static void show_settings(void)
 {
-    const ui_strings_t *s = ui_strings(s_english.load());
+    const ui_strings_t *s = ui_strings();
     hide_all_controls();
 
     if (!s_settings_rebooting.load()) {
@@ -437,21 +427,6 @@ static void apply_screen(ui_screen_t screen)
         sync_backlight_hold_for_screen(screen);
     }
 
-    const ui_strings_t *s = ui_strings(s_english.load());
-    if (s_lang_btn) {
-        lv_obj_t *lbl = lv_obj_get_child(s_lang_btn, 0);
-        if (lbl) {
-            lv_label_set_text(lbl, s->lang_toggle);
-        }
-    }
-}
-
-static void on_lang(lv_event_t *e)
-{
-    (void)e;
-    display_activity_notify();
-    s_english.store(!s_english.load());
-    apply_screen(s_screen);
 }
 
 static void on_learn(lv_event_t *e)
@@ -649,13 +624,6 @@ static void build_ui(void)
     lv_obj_align(s_brightness, LV_ALIGN_BOTTOM_MID, 0, -36);
     lv_obj_add_event_cb(s_brightness, on_brightness, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    s_lang_btn = UI_BTN_CREATE(s_root);
-    style_btn(s_lang_btn, 0x3A4A58);
-    lv_obj_set_size(s_lang_btn, 44, 28);
-    lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
-    lv_obj_center(make_label(s_lang_btn, &ui_font_cn_16, 0xFFFFFF));
-    lv_obj_add_event_cb(s_lang_btn, on_lang, LV_EVENT_CLICKED, nullptr);
-
     s_btn_home_mode = UI_BTN_CREATE(s_root);
     style_btn(s_btn_home_mode, 0x2F6FED);
     lv_obj_set_size(s_btn_home_mode, 160, 48);
@@ -773,7 +741,7 @@ esp_err_t ui_init(void)
     }
 
     s_ready.store(true);
-    ESP_LOGI(TAG, "UI ready (default language: Chinese)");
+    ESP_LOGI(TAG, "UI ready (Chinese)");
     return ESP_OK;
 }
 
@@ -783,12 +751,7 @@ esp_err_t ui_show_commissioning_busy(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /*
-     * Freeze the language currently selected on the pairing page (via EN/中文)
-     * so the busy frame matches what the user last chose.
-     */
     s_pairing_busy.store(true);
-    const bool english = s_english.load();
     if (!lvgl_port_lock(200)) {
         s_pairing_busy.store(false);
         return ESP_ERR_TIMEOUT;
@@ -805,9 +768,8 @@ esp_err_t ui_show_commissioning_busy(void)
     lv_refr_now(display_get_disp());
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "Showing commissioning-busy screen (lang=%s, title=%s)",
-             english ? "en" : "zh",
-             ui_strings(english)->pairing_busy_title);
+    ESP_LOGI(TAG, "Showing commissioning-busy screen (title=%s)",
+             ui_strings()->pairing_busy_title);
     return ESP_OK;
 }
 
@@ -854,18 +816,7 @@ void ui_deinit(void)
     s_temp_label = nullptr;
     s_mode_list = nullptr;
     s_brightness = nullptr;
-    s_lang_btn = nullptr;
     s_hint = nullptr;
 }
 
 void ui_update(void) {}
-
-void ui_set_language_english(bool english)
-{
-    s_english.store(english);
-}
-
-bool ui_is_language_english(void)
-{
-    return s_english.load();
-}
