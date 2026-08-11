@@ -114,7 +114,9 @@ static constexpr uint32_t kColOk = 0x1F8A5F;
 static constexpr uint32_t kColCool = 0x2B4C7E;
 static constexpr uint32_t kColHeat = 0x8B3A3A;
 static constexpr uint32_t kColChip = 0x243447;
+#if 0 /* English toggle disabled */
 static constexpr uint32_t kColLang = 0x3A4A58;
+#endif
 
 static void style_circle_screen(lv_obj_t *obj)
 {
@@ -276,6 +278,8 @@ static void place_lang_btn(void)
     if (!s_lang_btn) {
         return;
     }
+    /* English toggle temporarily disabled — Chinese-only UI. */
+#if 0
     /*
      * Round 240px: inset from the rim so EN/中文 is not clipped by clip_corner.
      * Pairing page overrides to TOP_LEFT so it does not cover 「网」.
@@ -284,6 +288,9 @@ static void place_lang_btn(void)
     lv_obj_set_size(s_lang_btn, english ? 44 : 34, 24);
     lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -30, 18);
     lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+#else
+    lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+#endif
 }
 
 static void show_pairing(void)
@@ -327,6 +334,7 @@ static void show_pairing(void)
     lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
+#if 0 /* English toggle temporarily disabled */
     /* Top-left inset: avoids fighting 「网」 and round-edge clip on the right. */
     if (s_lang_btn) {
         const bool english = s_english.load();
@@ -334,6 +342,11 @@ static void show_pairing(void)
         lv_obj_align(s_lang_btn, LV_ALIGN_TOP_LEFT, 26, 14);
         lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
     }
+#else
+    if (s_lang_btn) {
+        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 
     char line[64];
     std::snprintf(line, sizeof(line), "%s\n%s", s->manual_code, s_manual_code);
@@ -577,10 +590,14 @@ static void apply_screen(ui_screen_t screen)
 
 static void on_lang(lv_event_t *e)
 {
+#if 0 /* English toggle disabled */
     (void)e;
     display_activity_notify();
     s_english.store(!s_english.load());
     apply_screen(s_screen);
+#else
+    (void)e;
+#endif
 }
 
 static void on_learn(lv_event_t *e)
@@ -791,12 +808,17 @@ static void build_ui(void)
     lv_obj_set_style_bg_color(s_brightness, lv_color_hex(0xDCE6F0), LV_PART_KNOB);
     lv_obj_add_event_cb(s_brightness, on_brightness, LV_EVENT_VALUE_CHANGED, nullptr);
 
+#if 0 /* English language toggle temporarily disabled — Chinese-only. */
     s_lang_btn = UI_BTN_CREATE(s_root);
     style_btn(s_lang_btn, kColLang);
     lv_obj_set_size(s_lang_btn, 36, 24);
     place_lang_btn();
     lv_obj_center(make_label(s_lang_btn, &ui_font_cn_18, 0xFFFFFF));
     lv_obj_add_event_cb(s_lang_btn, on_lang, LV_EVENT_CLICKED, nullptr);
+#else
+    s_lang_btn = nullptr;
+    s_english.store(false);
+#endif
 
     s_btn_home_mode = UI_BTN_CREATE(s_root);
     style_btn(s_btn_home_mode, kColAccent);

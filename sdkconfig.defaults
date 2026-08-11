@@ -54,6 +54,12 @@ CONFIG_CHIP_PROJECT_CONFIG="main/CHIPProjectConfig.h"
 # Disable hardcoded test serial; app generates one (random + MAC suffix)
 CONFIG_USE_TEST_SERIAL_NUMBER=""
 
+# Per-device pairing codes via custom CommissionableDataProvider.
+# Without this, EXAMPLE (Test) provider always returns 20202021 / 34970112332.
+CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER=y
+# CONFIG_EXAMPLE_COMMISSIONABLE_DATA_PROVIDER is not set
+CONFIG_ENABLE_TEST_SETUP_PARAMS=n
+
 # Enable HKDF in mbedtls
 CONFIG_MBEDTLS_HKDF_C=y
 

@@ -5,6 +5,7 @@ set(COMPONENT_SRCS
     "app_main.cpp"
     "app_driver.cpp"
     "app_settings.cpp"
+    "unique_commissionable_data_provider.cpp"
     "board_i2c.cpp"
     "drivers/display_gc9a01.cpp"
     "drivers/it7259.cpp"

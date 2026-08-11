@@ -300,9 +300,9 @@ python3 scripts/gen_user_manual_pdf.py
 | Manufacturer（VendorName） | `aidaegis` | Matter Basic Information |
 | 设备名（ProductName / NodeLabel） | `AC Remote` | 手机里显示的名称；用户可在 App 中改名 |
 | SerialNumber | `RRRRRRRRMMMM` | 首次启动生成：8 位随机十六进制 + Wi‑Fi STA MAC 后 4 位；写入 `chip-factory` NVS 后固定 |
-| Setup Passcode / Discriminator | 每台设备随机 | 首次启动生成并写入 `chip-factory`（含匹配的 SPAKE2+ salt/verifier）；决定屏上/串口 QR 与数字配对码，**各设备唯一** |
+| Setup Passcode / Discriminator | 每台设备随机 | 通过 `CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER` + `unique_commissionable_data_provider` 在首次启动写入 `chip-factory`（含 SPAKE2+ salt）；决定屏上/串口 QR 与数字配对码，**各设备唯一**。不再使用共享测试码 `20202021` / `34970112332`。 |
 
-串口日志会出现 `Generated SerialNumber: ...`（首次）或 `SerialNumber: ...`（后续启动），以及 `Generated unique commissionable data: passcode=... discriminator=...`（首次）或 `Commissionable data: passcode=...`（后续）。若需重新生成序列号或配对码，需擦除 flash / 清除 factory 区后再烧录（量产请改用 `esp-matter-mfg-tool` 预置工厂分区）。
+串口日志会出现 `Generated SerialNumber: ...`（首次）或 `SerialNumber: ...`（后续启动），以及 `unique_cdp: Generated unique commissionable data: passcode=... discriminator=...`（首次）或 `Loaded commissionable data: ...`（后续）。若仍看到 `34970112332`，说明仍在用 Test provider：请 `idf.py fullclean` 后按本仓库 `sdkconfig.defaults` 重新配置并烧录；若需重新生成配对码，擦除 flash / factory 分区后再烧（量产请用 `esp-matter-mfg-tool` 预置工厂分区）。
 
 ### 2. 与空调红外学习
 

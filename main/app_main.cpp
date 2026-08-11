@@ -16,7 +16,6 @@
 #include <nvs_flash.h>
 #include <cstdio>
 #include <cstring>
-#include <cinttypes>
 
 #if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
 #include <esp_coexist.h>
@@ -32,15 +31,12 @@
 #include <atomic>
 
 #include <platform/CHIPDeviceLayer.h>
-#include <platform/CommissionableDataProvider.h>
 #include <platform/ESP32/ESP32Config.h>
-#include <crypto/CHIPCryptoPAL.h>
-#include <lib/support/Base64.h>
-#include <lib/support/Span.h>
-#include <setup_payload/SetupPayload.h>
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
+#include <esp_matter_providers.h>
 
+#include "unique_commissionable_data_provider.h"
 #include "sht30.h"
 #include "ws2812_temp_light.h"
 #include "board_i2c.h"
@@ -64,6 +60,8 @@ using namespace esp_matter;
 using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
 using namespace chip::app::Clusters;
+
+static unique_commissionable_data_provider s_unique_commissionable_data_provider;
 
 constexpr auto k_timeout_seconds = 300;
 static bool s_commissioning_in_progress = false;
@@ -144,123 +142,6 @@ static void app_ensure_serial_number()
     }
 
     ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
-}
-
-/**
- * Ensure each flashed device has a unique Matter pairing identity.
- *
- * Setup Passcode + Discriminator (and matching SPAKE2+ salt/verifier) drive the
- * QR / manual pairing codes. Dev firmware defaults are shared across all units
- * unless persisted here. Values are stored in chip-factory NVS so they survive
- * Matter factory-reset the same way SerialNumber does.
- *
- * Must run before esp_matter::start() so BLE commissioning ads and onboarding
- * prints use the per-device values (not the shared test defaults).
- */
-static void app_ensure_unique_commissionable_data()
-{
-    using chip::DeviceLayer::Internal::ESP32Config;
-
-    if (ESP32Config::ConfigValueExists(ESP32Config::kConfigKey_SetupPinCode)) {
-        uint32_t pin = 0;
-        uint32_t disc = 0;
-        if (ESP32Config::ReadConfigValue(ESP32Config::kConfigKey_SetupPinCode, pin) == CHIP_NO_ERROR &&
-            ESP32Config::ReadConfigValue(ESP32Config::kConfigKey_SetupDiscriminator, disc) ==
-                CHIP_NO_ERROR) {
-            ESP_LOGI(TAG, "Commissionable data: passcode=%" PRIu32 " discriminator=%" PRIu32,
-                     pin, disc);
-        } else {
-            ESP_LOGI(TAG, "Commissionable data already present in NVS");
-        }
-        return;
-    }
-
-    /* Spec: passcode 1..99999998 excluding trivial / invalid patterns. */
-    uint32_t passcode = 0;
-    for (int attempt = 0; attempt < 32; ++attempt) {
-        uint32_t rnd = 0;
-        esp_fill_random(reinterpret_cast<uint8_t *>(&rnd), sizeof(rnd));
-        passcode = (rnd % chip::kMaxSetupPasscode) + 1;
-        if (chip::SetupPayload::IsValidSetupPIN(passcode)) {
-            break;
-        }
-        passcode = 0;
-    }
-    if (passcode == 0) {
-        /* Extremely unlikely; fall back to a non-trivial derived value. */
-        uint32_t rnd = 0;
-        esp_fill_random(reinterpret_cast<uint8_t *>(&rnd), sizeof(rnd));
-        passcode = 10000000u + (rnd % 89999998u);
-        if (!chip::SetupPayload::IsValidSetupPIN(passcode)) {
-            passcode += 1;
-        }
-    }
-
-    uint16_t disc_rnd = 0;
-    esp_fill_random(reinterpret_cast<uint8_t *>(&disc_rnd), sizeof(disc_rnd));
-    const uint16_t discriminator = static_cast<uint16_t>(disc_rnd & chip::kMaxDiscriminatorValue);
-
-    constexpr uint32_t k_iterations = 1000;
-    constexpr size_t k_salt_len = chip::Crypto::kSpake2p_Min_PBKDF_Salt_Length;
-    uint8_t salt[k_salt_len] = {};
-    esp_fill_random(salt, sizeof(salt));
-    const chip::ByteSpan salt_span(salt, sizeof(salt));
-
-    chip::Crypto::Spake2pVerifier verifier;
-    CHIP_ERROR err = verifier.Generate(k_iterations, salt_span, passcode);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "SPAKE2+ verifier Generate failed: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-
-    uint8_t verifier_serial[chip::Crypto::kSpake2p_VerifierSerialized_Length] = {};
-    chip::MutableByteSpan verifier_span(verifier_serial);
-    err = verifier.Serialize(verifier_span);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "SPAKE2+ verifier Serialize failed: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-
-    char salt_b64[BASE64_ENCODED_LEN(k_salt_len) + 1] = {};
-    const uint16_t salt_b64_len =
-        chip::Base64Encode(salt, static_cast<uint16_t>(k_salt_len), salt_b64);
-    salt_b64[salt_b64_len] = '\0';
-
-    char verifier_b64[BASE64_ENCODED_LEN(chip::Crypto::kSpake2p_VerifierSerialized_Length) + 1] = {};
-    const uint16_t verifier_b64_len = chip::Base64Encode(
-        verifier_serial, static_cast<uint16_t>(verifier_span.size()), verifier_b64);
-    verifier_b64[verifier_b64_len] = '\0';
-
-    err = ESP32Config::WriteConfigValue(ESP32Config::kConfigKey_SetupPinCode, passcode);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to store SetupPinCode: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-    err = ESP32Config::WriteConfigValue(ESP32Config::kConfigKey_SetupDiscriminator,
-                                        static_cast<uint32_t>(discriminator));
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to store SetupDiscriminator: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-    err = ESP32Config::WriteConfigValue(ESP32Config::kConfigKey_Spake2pIterationCount, k_iterations);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to store Spake2pIterationCount: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_Spake2pSalt, salt_b64);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to store Spake2pSalt: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_Spake2pVerifier, verifier_b64);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to store Spake2pVerifier: %" CHIP_ERROR_FORMAT, err.Format());
-        return;
-    }
-
-    ESP_LOGI(TAG,
-             "Generated unique commissionable data: passcode=%" PRIu32 " discriminator=%u",
-             passcode, static_cast<unsigned>(discriminator));
 }
 
 /** Set default NodeLabel so controllers show "AC Remote" before the user renames it. */
@@ -993,12 +874,6 @@ extern "C" void app_main()
     /* Persist SerialNumber before Matter reads Basic Information */
     app_ensure_serial_number();
 
-    /*
-     * Persist unique Setup Passcode / Discriminator / SPAKE2+ verifier before
-     * Matter start so QR, manual code, and BLE ads are device-unique.
-     */
-    app_ensure_unique_commissionable_data();
-
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
     /* Button callbacks are registered inside init; handle is not needed here. */
@@ -1202,6 +1077,10 @@ extern "C" void app_main()
     set_openthread_platform_config(&config);
 #endif
 
+#if CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER
+    /* Must be before start(): replaces Test provider (shared 20202021 codes). */
+    esp_matter::set_custom_commissionable_data_provider(&s_unique_commissionable_data_provider);
+#endif
 
     /* Matter start */
     err = esp_matter::start(app_event_cb);
