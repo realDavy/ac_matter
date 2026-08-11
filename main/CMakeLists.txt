@@ -1,4 +1,16 @@
-idf_component_register(SRC_DIRS          "." "drivers" "ui"
+# List UI sources explicitly. ESP-IDF SRC_DIRS only re-globs at CMake configure
+# time, so a newly added ui_font_*.c is missed by incremental `idf.py build`
+# and links fail with undefined references (e.g. ui_font_cn_28).
+set(UI_SRCS
+    "ui/ui.cpp"
+    "ui/qrcode.c"
+    "ui/ui_font_cn_16.c"
+    "ui/ui_font_cn_20.c"
+    "ui/ui_font_cn_28.c"
+)
+
+idf_component_register(SRC_DIRS          "." "drivers"
+                       SRCS              ${UI_SRCS}
                        PRIV_INCLUDE_DIRS  "." "drivers" "ui" "${ESP_MATTER_PATH}/examples/common/utils"
 )
 
