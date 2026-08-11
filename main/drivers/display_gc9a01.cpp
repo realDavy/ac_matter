@@ -156,6 +156,16 @@ void display_set_idle_hold(bool hold)
     }
 }
 
+static void touch_map_point(lv_point_t *pt)
+{
+#if BOARD_LCD_MIRROR_X
+    pt->x = static_cast<lv_coord_t>(BOARD_LCD_H_RES - 1 - pt->x);
+#endif
+#if BOARD_LCD_MIRROR_Y
+    pt->y = static_cast<lv_coord_t>(BOARD_LCD_V_RES - 1 - pt->y);
+#endif
+}
+
 #if LVGL_VERSION_MAJOR >= 9
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -169,6 +179,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     if (it7259_read(&point) != ESP_OK || !point.pressed) {
         data->point.x = point.x;
         data->point.y = point.y;
+        touch_map_point(&data->point);
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
@@ -181,6 +192,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         display_activity_notify();
         data->point.x = point.x;
         data->point.y = point.y;
+        touch_map_point(&data->point);
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
@@ -188,6 +200,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     display_activity_notify();
     data->point.x = point.x;
     data->point.y = point.y;
+    touch_map_point(&data->point);
     data->state = LV_INDEV_STATE_PRESSED;
 }
 
@@ -234,7 +247,8 @@ static esp_err_t display_init_hw(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X != 0,
+                                         BOARD_LCD_MIRROR_Y != 0));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     s_hw_ready = true;
@@ -317,8 +331,8 @@ static esp_err_t display_start_lvgl(void)
             disp_cfg.vres = BOARD_LCD_V_RES;
             disp_cfg.monochrome = false;
             disp_cfg.rotation.swap_xy = false;
-            disp_cfg.rotation.mirror_x = false;
-            disp_cfg.rotation.mirror_y = false;
+            disp_cfg.rotation.mirror_x = (BOARD_LCD_MIRROR_X != 0);
+            disp_cfg.rotation.mirror_y = (BOARD_LCD_MIRROR_Y != 0);
             disp_cfg.flags.buff_dma = dma;
 
             s_disp = lvgl_port_add_disp(&disp_cfg);

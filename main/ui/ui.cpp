@@ -70,12 +70,12 @@ static std::atomic<bool> s_settings_rebooting{false};
 static TickType_t s_reboot_at_tick = 0;
 
 /*
- * Matter MT: payloads fit QR v4 (33 modules). Scale 4 + 2-module quiet zone
- * → 148 px: scannable on the 1.28" round panel while leaving room for the
- * manual layout (title + hint + code). 1-bit indexed keeps BSS small.
+ * Matter MT: payloads fit QR v4 (33 modules). Scale 3 + 2-module quiet zone
+ * → 111 px: leaves clear gaps for title/hint above and pairing code below on
+ * the 1.28" round panel. 1-bit indexed keeps BSS small.
  */
 static constexpr int kQrVersion = 4;
-static constexpr int kQrScale = 4;
+static constexpr int kQrScale = 3;
 static constexpr int kQrQuiet = 2; /* white modules around the symbol */
 static constexpr int kQrMaxPx = (4 * kQrVersion + 17 + 2 * kQrQuiet) * kQrScale;
 static constexpr int kQrStrideBytes = (kQrMaxPx + 7) / 8;
@@ -221,7 +221,16 @@ static void draw_qr(const char *text)
                                   static_cast<uint8_t>(y))) {
                 continue;
             }
-            const int x0 = (x + kQrQuiet) * kQrScale;
+            /*
+             * Panel X-mirror flips the flushed frame. Pre-mirror the symbol so
+             * the physical QR stays upright and scannable.
+             */
+#if BOARD_LCD_MIRROR_X
+            const int mx = size - 1 - x;
+#else
+            const int mx = x;
+#endif
+            const int x0 = (mx + kQrQuiet) * kQrScale;
             const int y0 = (y + kQrQuiet) * kQrScale;
             for (int dy = 0; dy < kQrScale; ++dy) {
                 for (int dx = 0; dx < kQrScale; ++dx) {
@@ -293,22 +302,23 @@ static void show_pairing(void)
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
     lv_obj_set_width(s_title, 150);
     lv_label_set_text(s_title, s->pairing_title);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 12);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 10);
 
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_16, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
     lv_obj_set_width(s_subtitle, 180);
     lv_label_set_text(s_subtitle, s->pairing_hint);
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 36);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 34);
 
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 2);
+    /* 111px QR: nudge down so it clears the hint line. */
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 10);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_set_style_text_font(s_code_label, &ui_font_cn_16, 0);
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
     lv_obj_set_width(s_code_label, 190);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -12);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
     place_lang_btn();
@@ -361,7 +371,7 @@ static void restore_default_chrome(void)
     place_lang_btn();
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
     lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -16);
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 2);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 10);
 }
 
 static void show_learn(void)
@@ -692,7 +702,7 @@ static void build_ui(void)
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
 
     s_qr_img = UI_IMAGE_CREATE(s_root);
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 2);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 10);
 
     s_code_label = make_label(s_root, &ui_font_cn_16, kColBody);
     lv_obj_set_width(s_code_label, 190);
