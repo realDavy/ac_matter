@@ -247,6 +247,7 @@ static esp_err_t display_init_hw(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    /* Fix horizontally reversed glyphs/UI on this GC9A01 module (MADCTL MX). */
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X != 0,
                                          BOARD_LCD_MIRROR_Y != 0));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
@@ -331,8 +332,13 @@ static esp_err_t display_start_lvgl(void)
             disp_cfg.vres = BOARD_LCD_V_RES;
             disp_cfg.monochrome = false;
             disp_cfg.rotation.swap_xy = false;
-            disp_cfg.rotation.mirror_x = (BOARD_LCD_MIRROR_X != 0);
-            disp_cfg.rotation.mirror_y = (BOARD_LCD_MIRROR_Y != 0);
+            /*
+             * Keep LVGL logical coords unflipped; hardware MADCTL (above) already
+             * corrects the panel. Setting mirror_x here as well can double-flip
+             * on some esp_lvgl_port versions.
+             */
+            disp_cfg.rotation.mirror_x = false;
+            disp_cfg.rotation.mirror_y = false;
             disp_cfg.flags.buff_dma = dma;
 
             s_disp = lvgl_port_add_disp(&disp_cfg);

@@ -221,16 +221,7 @@ static void draw_qr(const char *text)
                                   static_cast<uint8_t>(y))) {
                 continue;
             }
-            /*
-             * Panel X-mirror flips the flushed frame. Pre-mirror the symbol so
-             * the physical QR stays upright and scannable.
-             */
-#if BOARD_LCD_MIRROR_X
-            const int mx = size - 1 - x;
-#else
-            const int mx = x;
-#endif
-            const int x0 = (mx + kQrQuiet) * kQrScale;
+            const int x0 = (x + kQrQuiet) * kQrScale;
             const int y0 = (y + kQrQuiet) * kQrScale;
             for (int dy = 0; dy < kQrScale; ++dy) {
                 for (int dx = 0; dx < kQrScale; ++dx) {

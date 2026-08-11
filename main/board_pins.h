@@ -46,6 +46,10 @@
 #define BOARD_LCD_H_RES           240
 #define BOARD_LCD_V_RES           240
 #define BOARD_LCD_SPI_PIXEL_CLOCK_HZ (40 * 1000 * 1000)
-/* Round module is viewed with horizontal mirror; match panel + touch + QR. */
+/*
+ * This GC9A01 module shows LVGL content horizontally reversed unless MX is
+ * set (EN→NE, 汉字左右颠倒). Not a user-facing "mirror mode" — just the
+ * correct scan direction for this panel. Touch X must be remapped to match.
+ */
 #define BOARD_LCD_MIRROR_X        1
 #define BOARD_LCD_MIRROR_Y        0
