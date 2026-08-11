@@ -11,6 +11,12 @@ extern "C" {
 esp_err_t display_init(void);
 
 /**
+ * Drive the backlight GPIO low before LEDC/panel bring-up so a floating BL pin
+ * cannot light garbage GRAM during early boot. Safe to call before display_init().
+ */
+void display_backlight_early_off(void);
+
+/**
  * Tear down LVGL (task + draw buffers) while keeping the GC9A01 panel/SPI and
  * backlight up so the last drawn frame (e.g. "配对中...") remains visible. Used
  * during Matter PASE; call display_init() afterwards to bring the UI back.

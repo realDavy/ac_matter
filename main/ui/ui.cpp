@@ -571,10 +571,11 @@ static void apply_screen(ui_screen_t screen)
         break;
     }
 
-    /* First paint after init uses absolute hold; later updates are delta-only. */
-    if (!s_ready.load()) {
-        apply_backlight_hold_for_screen(screen);
-    } else {
+    /*
+     * During first ui_init(), defer backlight until after lv_refr_now() so the
+     * GC9A01 never lights random GRAM (power-on snow). Later updates sync hold.
+     */
+    if (s_ready.load()) {
         sync_backlight_hold_for_screen(screen);
     }
 
@@ -924,6 +925,15 @@ esp_err_t ui_init(void)
     if (lvgl_port_lock(1000)) {
         build_ui();
         apply_screen(decide_screen());
+        if (s_root) {
+            lv_obj_invalidate(s_root);
+        }
+        /* Push the first real frame into GRAM before enabling backlight. */
+        lv_refr_now(display_get_disp());
+        apply_backlight_hold_for_screen(s_screen);
+        if (!display_is_backlight_on()) {
+            display_activity_notify();
+        }
         lvgl_port_unlock();
     }
 

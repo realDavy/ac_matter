@@ -868,6 +868,12 @@ extern "C" void app_main()
 {
     esp_err_t err = ESP_OK;
 
+    /*
+     * Kill backlight ASAP so a floating BL pin cannot show GC9A01 snow while
+     * Matter/NVS bring-up runs (panel GRAM is random until the first UI flush).
+     */
+    display_backlight_early_off();
+
     /* Initialize the ESP NVS layer */
     nvs_flash_init();
 

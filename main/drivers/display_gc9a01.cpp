@@ -79,11 +79,35 @@ static void display_idle_timer_restart(void)
     }
 }
 
+void display_backlight_early_off(void)
+{
+    if (s_backlight_inited) {
+        display_set_backlight(false);
+        return;
+    }
+
+    /*
+     * Hold BL dark before LEDC claims the pin. GC9A01 GRAM is random until the
+     * first flush; a floating BL MOSFET gate can otherwise show snow at power-on.
+     */
+    gpio_config_t io = {};
+    io.pin_bit_mask = 1ULL << BOARD_LCD_BL_GPIO;
+    io.mode = GPIO_MODE_OUTPUT;
+    io.pull_up_en = GPIO_PULLUP_DISABLE;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+    if (gpio_config(&io) == ESP_OK) {
+        gpio_set_level(BOARD_LCD_BL_GPIO, 0);
+    }
+}
+
 static void backlight_init(void)
 {
     if (s_backlight_inited) {
         return;
     }
+
+    display_backlight_early_off();
 
     ledc_timer_config_t timer = {};
     timer.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -105,6 +129,43 @@ static void backlight_init(void)
     s_backlight_inited = true;
     s_backlight_on.store(false, std::memory_order_relaxed);
     display_idle_timer_ensure();
+}
+
+/*
+ * Fill GRAM with black before DISPON / backlight so residual random pixels are
+ * never visible if the backlight leaks slightly during bring-up.
+ */
+static esp_err_t display_clear_gram_black(void)
+{
+    if (s_panel == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    constexpr int k_lines = 20;
+    const size_t bytes =
+        static_cast<size_t>(BOARD_LCD_H_RES) * k_lines * sizeof(uint16_t);
+    auto *buf = static_cast<uint16_t *>(
+        heap_caps_calloc(1, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    if (buf == nullptr) {
+        buf = static_cast<uint16_t *>(heap_caps_calloc(1, bytes, MALLOC_CAP_INTERNAL));
+    }
+    if (buf == nullptr) {
+        ESP_LOGW(TAG, "GRAM clear skipped: no buffer");
+        return ESP_ERR_NO_MEM;
+    }
+
+    for (int y = 0; y < BOARD_LCD_V_RES; y += k_lines) {
+        const int y_end = (y + k_lines < BOARD_LCD_V_RES) ? (y + k_lines)
+                                                          : BOARD_LCD_V_RES;
+        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, BOARD_LCD_H_RES,
+                                                  y_end, buf);
+        if (err != ESP_OK) {
+            heap_caps_free(buf);
+            return err;
+        }
+    }
+    heap_caps_free(buf);
+    return ESP_OK;
 }
 
 void display_set_backlight(bool on)
@@ -250,7 +311,13 @@ static esp_err_t display_init_hw(void)
     /* Fix horizontally reversed glyphs/UI on this GC9A01 module (MADCTL MX). */
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X != 0,
                                          BOARD_LCD_MIRROR_Y != 0));
+    /*
+     * Keep DISPON off until GRAM is black. Backlight stays off until the first
+     * LVGL frame is flushed (see ui_init) to avoid power-on snow/static.
+     */
+    (void)display_clear_gram_black();
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+    display_set_backlight(false);
 
     s_hw_ready = true;
     return ESP_OK;
@@ -388,9 +455,13 @@ static esp_err_t display_start_lvgl(void)
         }
     }
 
-    display_activity_notify();
+    /*
+     * Do not enable backlight here — GRAM still has no UI frame. ui_init()
+     * flushes the first paint, then turns the backlight on.
+     */
     s_ready = true;
-    ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d)", BOARD_LCD_H_RES, BOARD_LCD_V_RES);
+    ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d), backlight deferred",
+             BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     return ESP_OK;
 }
 
