@@ -50,10 +50,10 @@ gen() {
   echo "wrote $OUT/${name}.c (size=${size} bpp=${bpp})"
 }
 
-# bpp 8: smoother AA on the 1.28" panel (looks “细腻”; needs COLOR_16_SWAP).
-gen 16 ui_font_cn_16 8
-gen 20 ui_font_cn_20 8
-gen 28 ui_font_cn_28 8
+# bpp 8 + slightly larger px sizes for smoother strokes on the 1.28" panel.
+gen 18 ui_font_cn_18 8
+gen 22 ui_font_cn_22 8
+gen 30 ui_font_cn_30 8
 
 echo "Note: if you add a new size, also add the .c to main/CMakeLists.txt COMPONENT_SRCS,"
 echo "then run: idf.py reconfigure && idf.py build"

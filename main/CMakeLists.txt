@@ -12,9 +12,9 @@ set(COMPONENT_SRCS
     "drivers/ws2812_temp_light.cpp"
     "ui/ui.cpp"
     "ui/qrcode.c"
-    "ui/ui_font_cn_16.c"
-    "ui/ui_font_cn_20.c"
-    "ui/ui_font_cn_28.c"
+    "ui/ui_font_cn_18.c"
+    "ui/ui_font_cn_22.c"
+    "ui/ui_font_cn_30.c"
 )
 
 idf_component_register(SRCS              ${COMPONENT_SRCS}
