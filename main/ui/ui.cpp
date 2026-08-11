@@ -291,25 +291,28 @@ static void show_pairing(void)
     /* Manual §4: title → hint → QR → 配对码 + digits → EN. */
     lv_obj_set_style_text_font(s_title, &ui_font_cn_20, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
-    lv_obj_set_width(s_title, 150);
+    lv_obj_set_width(s_title, 168);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_title, s->pairing_title);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 10);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 8);
 
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_16, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
-    lv_obj_set_width(s_subtitle, 180);
+    lv_obj_set_width(s_subtitle, 200);
+    lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_subtitle, s->pairing_hint);
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 34);
 
-    /* 111px QR: nudge down so it clears the hint line. */
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 10);
+    /* 111px QR: keep a clear gap under the hint so glyphs are not clipped. */
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 12);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_set_style_text_font(s_code_label, &ui_font_cn_16, 0);
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
-    lv_obj_set_width(s_code_label, 190);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_width(s_code_label, 200);
+    lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
     place_lang_btn();
