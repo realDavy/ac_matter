@@ -588,17 +588,15 @@ static void apply_screen(ui_screen_t screen)
     }
 }
 
+#if 0 /* English toggle disabled */
 static void on_lang(lv_event_t *e)
 {
-#if 0 /* English toggle disabled */
     (void)e;
     display_activity_notify();
     s_english.store(!s_english.load());
     apply_screen(s_screen);
-#else
-    (void)e;
-#endif
 }
+#endif
 
 static void on_learn(lv_event_t *e)
 {
