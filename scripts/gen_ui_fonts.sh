@@ -25,5 +25,5 @@ gen 16 ui_font_cn_16
 gen 20 ui_font_cn_20
 gen 28 ui_font_cn_28
 
-echo "Note: if you add a new size, also add the .c to main/CMakeLists.txt UI_SRCS,"
+echo "Note: if you add a new size, also add the .c to main/CMakeLists.txt COMPONENT_SRCS,"
 echo "then run: idf.py reconfigure && idf.py build"
