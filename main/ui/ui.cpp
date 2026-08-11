@@ -70,12 +70,12 @@ static std::atomic<bool> s_settings_rebooting{false};
 static TickType_t s_reboot_at_tick = 0;
 
 /*
- * Matter MT: payloads fit QR v4 (33 modules). Scale 2 + 2-module quiet zone
- * → 74 px: still scannable up close, leaves room for fully visible title /
- * hint / centered pairing code on the 1.28" round panel.
+ * Matter MT: payloads fit QR v4 (33 modules). Scale 3 + 2-module quiet zone
+ * → 111 px: fills the mid-screen “green box” band while keeping title / hint /
+ * centered pairing code fully visible on the 1.28" round panel.
  */
 static constexpr int kQrVersion = 4;
-static constexpr int kQrScale = 2;
+static constexpr int kQrScale = 3;
 static constexpr int kQrQuiet = 2; /* white modules around the symbol */
 static constexpr int kQrMaxPx = (4 * kQrVersion + 17 + 2 * kQrQuiet) * kQrScale;
 static constexpr int kQrStrideBytes = (kQrMaxPx + 7) / 8;
@@ -277,13 +277,12 @@ static void place_lang_btn(void)
         return;
     }
     /*
-     * Round 240px panel: near the top the safe chord is ~150px wide. Inset the
-     * EN/中文 chip so it is not clipped by lv clip_corner (was -10,14 → cut off).
+     * Round 240px: inset from the rim so EN/中文 is not clipped by clip_corner.
+     * Pairing page overrides to TOP_LEFT so it does not cover 「网」.
      */
     const bool english = s_english.load();
-    /* "EN" is short; "中文" needs a wider chip. */
-    lv_obj_set_size(s_lang_btn, english ? 44 : 36, 24);
-    lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -28, 18);
+    lv_obj_set_size(s_lang_btn, english ? 44 : 34, 24);
+    lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -30, 18);
     lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -295,17 +294,18 @@ static void show_pairing(void)
     draw_qr(s_qr_text);
 
     /*
-     * Round layout (r=120), top→bottom:
-     *   title (centered) → hint → QR (74px) → 配对码 + digits (centered)
-     * EN sits inset top-right and must not steal title width.
+     * Annotated photo fixes:
+     *  - EN was clipping 「网」 on the top-right → put EN top-left (inset).
+     *  - Title / 配对码 stay centered.
+     *  - QR enlarged to 111px to fill the mid-screen band (green box).
      */
     lv_obj_set_style_text_font(s_title, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
-    lv_obj_set_width(s_title, 112);
+    lv_obj_set_width(s_title, 130);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_title, s->pairing_title);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 8, 14);
 
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
@@ -314,9 +314,9 @@ static void show_pairing(void)
     lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_subtitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_subtitle, s->pairing_hint);
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 38);
 
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, -2);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 2);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_set_style_text_font(s_code_label, &ui_font_cn_18, 0);
@@ -324,14 +324,14 @@ static void show_pairing(void)
     lv_obj_set_width(s_code_label, 180);
     lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_code_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
-    /* EN inset on the title row; title width leaves a gap so neither is clipped. */
+    /* Top-left inset: avoids fighting 「网」 and round-edge clip on the right. */
     if (s_lang_btn) {
         const bool english = s_english.load();
         lv_obj_set_size(s_lang_btn, english ? 44 : 34, 24);
-        lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -30, 16);
+        lv_obj_align(s_lang_btn, LV_ALIGN_TOP_LEFT, 26, 14);
         lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
     }
 
