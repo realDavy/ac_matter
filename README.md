@@ -403,7 +403,7 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 | 想让空调和灯分开/合并 | 屏上左滑到灯光再左滑进入**组件设置**，选「分开显示」或「组合显示」→ 应用并重启 → Home 中删除旧配件后重新配对 |
 | 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；配网页在圆屏，串口会打 `UI Matter code:` / CHIP onboarding QR |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
-| 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |
+| 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉；日志看 `it7259` probe。固件需按 ITE 手册解析 Query bit7/坐标打包 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |
 | 有学习但空调不动 | 查 GPIO5 驱动电路与发射管方向/电流；试 Alt 遍历换协议 |
 | 日志 `SHT30 not available` | 检查 SDA/SCL/ADDR/供电与上拉；无传感器属正常降级 |

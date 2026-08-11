@@ -167,6 +167,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 #endif
     it7259_point_t point = {};
     if (it7259_read(&point) != ESP_OK || !point.pressed) {
+        data->point.x = point.x;
+        data->point.y = point.y;
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
@@ -177,6 +179,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
      */
     if (!display_is_backlight_on()) {
         display_activity_notify();
+        data->point.x = point.x;
+        data->point.y = point.y;
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }

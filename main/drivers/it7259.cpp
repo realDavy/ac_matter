@@ -11,25 +11,34 @@
 
 static const char *TAG = "it7259";
 
-/* IT7259 command / point registers (common on 1.28" GC9A01 modules). */
+/*
+ * IT7259 buffer indexes (ITE Cap Sensor Programming Guide):
+ *   0x80 Query Buffer
+ *   0xE0 Point Information Buffer
+ *
+ * I2C 7-bit address is 0x46 (write 0x8C / read 0x8D on the wire).
+ */
 static constexpr uint8_t kCmdQuery = 0x80;
 static constexpr uint8_t kCmdPoint = 0xE0;
 
+/* Query bits 7:6 = Packet Information Status. */
+static constexpr uint8_t kQueryNewPacket = 0x80; /* 1xb: new packet available */
+static constexpr uint8_t kQueryStillTouch = 0x40; /* 01b: finger down, no new pkt */
+static constexpr uint8_t kQueryCmdBusy = 0x01;    /* command status busy */
+
+/* Point report byte0: format tag 0000b, low nibble = point/finger flags. */
+static constexpr uint8_t kPoint0Valid = 0x01;
+static constexpr uint8_t kPointFormatMask = 0xF0;
+
 static bool s_ready = false;
+static uint16_t s_last_x = 0;
+static uint16_t s_last_y = 0;
 
-static esp_err_t it7259_write_reg(uint8_t reg)
-{
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (BOARD_IT7259_ADDR << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_stop(cmd);
-    esp_err_t err = i2c_master_cmd_begin(board_i2c_port(), cmd, pdMS_TO_TICKS(50));
-    i2c_cmd_link_delete(cmd);
-    return err;
-}
-
-static esp_err_t it7259_read_bytes(uint8_t *buf, size_t len)
+/**
+ * Write buffer index then repeated-start read (S W reg Sr R data P).
+ * Matches the ITE programming-guide I2C examples.
+ */
+static esp_err_t it7259_read_reg(uint8_t reg, uint8_t *buf, size_t len)
 {
     if (buf == nullptr || len == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -37,13 +46,19 @@ static esp_err_t it7259_read_bytes(uint8_t *buf, size_t len)
 
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (BOARD_IT7259_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (BOARD_IT7259_ADDR << 1) | I2C_MASTER_READ, true);
     if (len > 1) {
         i2c_master_read(cmd, buf, len - 1, I2C_MASTER_ACK);
     }
     i2c_master_read_byte(cmd, buf + len - 1, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
+
+    board_i2c_lock();
     esp_err_t err = i2c_master_cmd_begin(board_i2c_port(), cmd, pdMS_TO_TICKS(50));
+    board_i2c_unlock();
     i2c_cmd_link_delete(cmd);
     return err;
 }
@@ -91,18 +106,18 @@ esp_err_t it7259_init(void)
         gpio_config(&io);
     }
 
-    /* Probe: query register should ACK. */
-    err = it7259_write_reg(kCmdQuery);
+    /* Probe Query Buffer; NAK while the controller is still booting is OK. */
+    uint8_t query = 0xFF;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        err = it7259_read_reg(kCmdQuery, &query, 1);
+        if (err == ESP_OK) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "IT7259 probe failed on 0x%02X: %s",
                  BOARD_IT7259_ADDR, esp_err_to_name(err));
-        return err;
-    }
-
-    uint8_t query = 0xFF;
-    err = it7259_read_bytes(&query, 1);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "IT7259 query read failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -118,55 +133,86 @@ esp_err_t it7259_read(it7259_point_t *point)
         return ESP_ERR_INVALID_ARG;
     }
     memset(point, 0, sizeof(*point));
+    /* LVGL expects last coordinates on release samples. */
+    point->x = s_last_x;
+    point->y = s_last_y;
+    point->pressed = false;
 
     if (!s_ready) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = it7259_write_reg(kCmdQuery);
-    if (err != ESP_OK) {
-        return err;
-    }
-
     uint8_t query = 0xFF;
-    err = it7259_read_bytes(&query, 1);
+    esp_err_t err = it7259_read_reg(kCmdQuery, &query, 1);
     if (err != ESP_OK) {
         return err;
     }
 
     /*
-     * Bit7 clear => point buffer has data / finger present
-     * (matches common IT7257/IT7259 ESP & Rust drivers).
+     * Bits 7:6 Packet Information Status (ITE guide):
+     *   00b — idle, no packet
+     *   1xb — new packet available → read Point Buffer
+     *   01b — finger still down, no new packet → keep pressed at last XY
+     * Ignore command-busy (bit0) samples; retry next LVGL poll.
      */
-    if (query & 0x80) {
-        point->pressed = false;
+    if (query & kQueryCmdBusy) {
         return ESP_OK;
     }
 
-    err = it7259_write_reg(kCmdPoint);
-    if (err != ESP_OK) {
-        return err;
+    const bool new_packet = (query & kQueryNewPacket) != 0;
+    const bool still_touch = (query & kQueryStillTouch) != 0;
+    if (!new_packet && !still_touch) {
+        return ESP_OK;
+    }
+
+    if (!new_packet) {
+        /* Finger held without a fresh report. */
+        point->pressed = true;
+        return ESP_OK;
     }
 
     uint8_t buf[14] = {};
-    err = it7259_read_bytes(buf, sizeof(buf));
+    err = it7259_read_reg(kCmdPoint, buf, sizeof(buf));
     if (err != ESP_OK) {
         return err;
     }
 
-    /* Point packet: buf[0] point info; X/Y little-endian in buf[2..5]. */
-    const uint16_t x = static_cast<uint16_t>(buf[2] | (buf[3] << 8));
-    const uint16_t y = static_cast<uint16_t>(buf[4] | (buf[5] << 8));
-
-    point->x = (x >= BOARD_LCD_H_RES) ? static_cast<uint16_t>(BOARD_LCD_H_RES - 1) : x;
-    point->y = (y >= BOARD_LCD_V_RES) ? static_cast<uint16_t>(BOARD_LCD_V_RES - 1) : y;
-    point->pressed = (buf[0] & 0x01) != 0 || (query & 0x01) != 0 || (x | y) != 0;
-
-    /* Some firmwares only clear bit7 while finger is down; treat that as press. */
-    if (!(query & 0x80) && (x < BOARD_LCD_H_RES) && (y < BOARD_LCD_V_RES)) {
-        point->pressed = true;
+    /* Point reports use format tag 0000b; 1000b is gesture — ignore gestures. */
+    if ((buf[0] & kPointFormatMask) != 0) {
+        return ESP_OK;
     }
 
+    /* 000b in point-info nibble => all fingers removed. */
+    if ((buf[0] & 0x07) == 0) {
+        return ESP_OK;
+    }
+
+    if ((buf[0] & kPoint0Valid) == 0) {
+        return ESP_OK;
+    }
+
+    /*
+     * Packed 12-bit coordinates (ITE guide §6.1):
+     *   buf[2]      = X[7:0]
+     *   buf[3][3:0] = X[11:8]
+     *   buf[3][7:4] = Y[11:8]
+     *   buf[4]      = Y[7:0]
+     */
+    uint16_t x = static_cast<uint16_t>(buf[2] | ((buf[3] & 0x0F) << 8));
+    uint16_t y = static_cast<uint16_t>(buf[4] | ((buf[3] & 0xF0) << 4));
+
+    if (x >= BOARD_LCD_H_RES) {
+        x = BOARD_LCD_H_RES - 1;
+    }
+    if (y >= BOARD_LCD_V_RES) {
+        y = BOARD_LCD_V_RES - 1;
+    }
+
+    s_last_x = x;
+    s_last_y = y;
+    point->x = x;
+    point->y = y;
+    point->pressed = true;
     return ESP_OK;
 }
 

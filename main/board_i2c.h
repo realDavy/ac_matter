@@ -12,3 +12,7 @@ esp_err_t board_i2c_init(void);
 bool board_i2c_is_ready(void);
 
 i2c_port_t board_i2c_port(void);
+
+/** Serialize multi-device access on the shared I2C bus. */
+void board_i2c_lock(void);
+void board_i2c_unlock(void);
