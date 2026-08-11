@@ -333,18 +333,22 @@ static esp_err_t display_start_lvgl(void)
             disp_cfg.monochrome = false;
             disp_cfg.rotation.swap_xy = false;
             /*
-             * Keep LVGL logical coords unflipped; hardware MADCTL (above) already
-             * corrects the panel. Setting mirror_x here as well can double-flip
-             * on some esp_lvgl_port versions.
+             * esp_lvgl_port applies these via esp_lcd_panel_mirror() after
+             * add_disp and overwrites any earlier panel_mirror() call — so the
+             * corrected scan direction MUST be set here, not only above.
              */
-            disp_cfg.rotation.mirror_x = false;
-            disp_cfg.rotation.mirror_y = false;
+            disp_cfg.rotation.mirror_x = (BOARD_LCD_MIRROR_X != 0);
+            disp_cfg.rotation.mirror_y = (BOARD_LCD_MIRROR_Y != 0);
             disp_cfg.flags.buff_dma = dma;
 
             s_disp = lvgl_port_add_disp(&disp_cfg);
             if (s_disp != nullptr) {
-                ESP_LOGI(TAG, "LVGL display buffer: %u lines, dma=%d", lines,
-                         dma ? 1 : 0);
+                /* Belt-and-suspenders: re-assert MADCTL after port init. */
+                ESP_ERROR_CHECK(esp_lcd_panel_mirror(
+                    s_panel, BOARD_LCD_MIRROR_X != 0, BOARD_LCD_MIRROR_Y != 0));
+                ESP_LOGI(TAG,
+                         "LVGL display buffer: %u lines, dma=%d, mirror_x=%d mirror_y=%d",
+                         lines, dma ? 1 : 0, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y);
                 break;
             }
             ESP_LOGW(TAG,
