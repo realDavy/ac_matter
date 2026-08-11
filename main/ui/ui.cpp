@@ -276,8 +276,14 @@ static void place_lang_btn(void)
     if (!s_lang_btn) {
         return;
     }
-    /* Manual: EN is top-right on every page; keep clear of centered titles. */
-    lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -10, 14);
+    /*
+     * Round 240px panel: near the top the safe chord is ~150px wide. Inset the
+     * EN/中文 chip so it is not clipped by lv clip_corner (was -10,14 → cut off).
+     */
+    const bool english = s_english.load();
+    /* "EN" is short; "中文" needs a wider chip. */
+    lv_obj_set_size(s_lang_btn, english ? 44 : 36, 24);
+    lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -28, 18);
     lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -288,31 +294,34 @@ static void show_pairing(void)
     refresh_onboarding_codes();
     draw_qr(s_qr_text);
 
-    /* Manual §4: title → hint → QR → 配对码 + digits → EN. */
-    lv_obj_set_style_text_font(s_title, &ui_font_cn_20, 0);
+    /*
+     * Circular safe layout (r=120): at y≈20 usable width ≈ 130px. Title must
+     * stay inside that chord and clear of the EN chip, or 「网」gets clipped.
+     */
+    lv_obj_set_style_text_font(s_title, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
-    lv_obj_set_width(s_title, 168);
-    lv_label_set_long_mode(s_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_title, 118);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_CLIP);
     lv_label_set_text(s_title, s->pairing_title);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -16, 18);
 
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_16, 0);
+    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
-    lv_obj_set_width(s_subtitle, 200);
+    lv_obj_set_width(s_subtitle, 168);
     lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_subtitle, s->pairing_hint);
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 42);
 
     /* 111px QR: keep a clear gap under the hint so glyphs are not clipped. */
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 12);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 14);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_set_style_text_font(s_code_label, &ui_font_cn_16, 0);
+    lv_obj_set_style_text_font(s_code_label, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
-    lv_obj_set_width(s_code_label, 200);
+    lv_obj_set_width(s_code_label, 168);
     lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -12);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
     place_lang_btn();
@@ -331,13 +340,13 @@ static void show_pairing_busy(void)
     if (s_lang_btn) {
         lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_set_style_text_font(s_title, &ui_font_cn_20, 0);
+    lv_obj_set_style_text_font(s_title, &ui_font_cn_22, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
     lv_obj_set_width(s_title, 180);
     lv_obj_align(s_title, LV_ALIGN_CENTER, 0, -18);
     lv_label_set_text(s_title, s->pairing_busy_title);
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_16, 0);
+    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
     lv_obj_set_width(s_subtitle, 180);
     lv_obj_align(s_subtitle, LV_ALIGN_CENTER, 0, 18);
@@ -353,12 +362,12 @@ static void show_pairing_busy(void)
 
 static void restore_default_chrome(void)
 {
-    lv_obj_set_style_text_font(s_title, &ui_font_cn_20, 0);
+    lv_obj_set_style_text_font(s_title, &ui_font_cn_22, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
     lv_obj_set_width(s_title, 150);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 14);
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_16, 0);
+    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
     lv_obj_set_width(s_subtitle, 180);
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
@@ -551,6 +560,7 @@ static void apply_screen(ui_screen_t screen)
         if (lbl) {
             lv_label_set_text(lbl, s->lang_toggle);
         }
+        place_lang_btn();
     }
 }
 
@@ -686,19 +696,19 @@ static void build_ui(void)
     lv_obj_add_event_cb(s_root, on_gesture, LV_EVENT_GESTURE, nullptr);
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    s_title = make_label(s_root, &ui_font_cn_20, kColTitle);
+    s_title = make_label(s_root, &ui_font_cn_22, kColTitle);
     lv_obj_set_width(s_title, 150);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 14);
 
-    s_subtitle = make_label(s_root, &ui_font_cn_16, kColMuted);
+    s_subtitle = make_label(s_root, &ui_font_cn_18, kColMuted);
     lv_obj_set_width(s_subtitle, 180);
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
 
     s_qr_img = UI_IMAGE_CREATE(s_root);
     lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 10);
 
-    s_code_label = make_label(s_root, &ui_font_cn_16, kColBody);
+    s_code_label = make_label(s_root, &ui_font_cn_18, kColBody);
     lv_obj_set_width(s_code_label, 190);
     lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
     lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -14);
@@ -707,7 +717,7 @@ static void build_ui(void)
     style_btn(s_btn_primary, kColAccent);
     lv_obj_set_size(s_btn_primary, 148, 46);
     lv_obj_align(s_btn_primary, LV_ALIGN_CENTER, 0, 42);
-    s_btn_primary_label = make_label(s_btn_primary, &ui_font_cn_16, 0xFFFFFF);
+    s_btn_primary_label = make_label(s_btn_primary, &ui_font_cn_18, 0xFFFFFF);
     lv_obj_center(s_btn_primary_label);
     lv_obj_add_event_cb(s_btn_primary, on_learn, LV_EVENT_CLICKED, nullptr);
 
@@ -715,7 +725,7 @@ static void build_ui(void)
     style_btn(s_btn_power, kColOk);
     lv_obj_set_size(s_btn_power, 108, 44);
     lv_obj_align(s_btn_power, LV_ALIGN_CENTER, 0, 8);
-    s_btn_power_label = make_label(s_btn_power, &ui_font_cn_16, 0xFFFFFF);
+    s_btn_power_label = make_label(s_btn_power, &ui_font_cn_18, 0xFFFFFF);
     lv_obj_center(s_btn_power_label);
     lv_obj_add_event_cb(s_btn_power, on_power, LV_EVENT_CLICKED, nullptr);
 
@@ -723,20 +733,20 @@ static void build_ui(void)
     style_btn(s_btn_down, kColCool);
     lv_obj_set_size(s_btn_down, 86, 40);
     lv_obj_align(s_btn_down, LV_ALIGN_CENTER, -52, 58);
-    lv_obj_center(make_label(s_btn_down, &ui_font_cn_16, 0xFFFFFF));
+    lv_obj_center(make_label(s_btn_down, &ui_font_cn_18, 0xFFFFFF));
     lv_obj_add_event_cb(s_btn_down, on_temp_down, LV_EVENT_CLICKED, nullptr);
 
     s_btn_up = UI_BTN_CREATE(s_root);
     style_btn(s_btn_up, kColHeat);
     lv_obj_set_size(s_btn_up, 86, 40);
     lv_obj_align(s_btn_up, LV_ALIGN_CENTER, 52, 58);
-    lv_obj_center(make_label(s_btn_up, &ui_font_cn_16, 0xFFFFFF));
+    lv_obj_center(make_label(s_btn_up, &ui_font_cn_18, 0xFFFFFF));
     lv_obj_add_event_cb(s_btn_up, on_temp_up, LV_EVENT_CLICKED, nullptr);
 
-    s_temp_label = make_label(s_root, &ui_font_cn_28, kColTitle);
+    s_temp_label = make_label(s_root, &ui_font_cn_30, kColTitle);
     lv_obj_align(s_temp_label, LV_ALIGN_CENTER, 0, -42);
 
-    s_hint = make_label(s_root, &ui_font_cn_16, kColMuted);
+    s_hint = make_label(s_root, &ui_font_cn_18, kColMuted);
     lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
 
     s_mode_list = lv_obj_create(s_root);
@@ -756,7 +766,7 @@ static void build_ui(void)
         lv_obj_t *b = UI_BTN_CREATE(s_mode_list);
         style_btn(b, kColChip);
         lv_obj_set_size(b, 92, 34);
-        lv_obj_center(make_label(b, &ui_font_cn_16, kColBody));
+        lv_obj_center(make_label(b, &ui_font_cn_18, kColBody));
         lv_obj_add_event_cb(b, on_mode, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
     }
@@ -772,9 +782,9 @@ static void build_ui(void)
 
     s_lang_btn = UI_BTN_CREATE(s_root);
     style_btn(s_lang_btn, kColLang);
-    lv_obj_set_size(s_lang_btn, 40, 26);
+    lv_obj_set_size(s_lang_btn, 36, 24);
     place_lang_btn();
-    lv_obj_center(make_label(s_lang_btn, &ui_font_cn_16, 0xFFFFFF));
+    lv_obj_center(make_label(s_lang_btn, &ui_font_cn_18, 0xFFFFFF));
     lv_obj_add_event_cb(s_lang_btn, on_lang, LV_EVENT_CLICKED, nullptr);
 
     s_btn_home_mode = UI_BTN_CREATE(s_root);
@@ -782,7 +792,7 @@ static void build_ui(void)
     lv_obj_set_size(s_btn_home_mode, 156, 46);
     lv_obj_align(s_btn_home_mode, LV_ALIGN_CENTER, 0, -14);
     s_btn_home_mode_label =
-        make_label(s_btn_home_mode, &ui_font_cn_16, 0xFFFFFF);
+        make_label(s_btn_home_mode, &ui_font_cn_18, 0xFFFFFF);
     lv_obj_center(s_btn_home_mode_label);
     lv_obj_add_event_cb(
         s_btn_home_mode, on_home_mode_toggle, LV_EVENT_CLICKED, nullptr);
@@ -792,7 +802,7 @@ static void build_ui(void)
     lv_obj_set_size(s_btn_settings_apply, 156, 42);
     lv_obj_align(s_btn_settings_apply, LV_ALIGN_CENTER, 0, 46);
     s_btn_settings_apply_label =
-        make_label(s_btn_settings_apply, &ui_font_cn_16, 0xFFFFFF);
+        make_label(s_btn_settings_apply, &ui_font_cn_18, 0xFFFFFF);
     lv_obj_center(s_btn_settings_apply_label);
     lv_obj_add_event_cb(
         s_btn_settings_apply, on_settings_apply, LV_EVENT_CLICKED, nullptr);
