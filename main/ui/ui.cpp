@@ -69,7 +69,21 @@ static app_home_display_mode_t s_home_mode_pending =
 static std::atomic<bool> s_settings_rebooting{false};
 static TickType_t s_reboot_at_tick = 0;
 
-static uint16_t s_qr_pixels[80 * 80];
+/*
+ * Matter MT: payloads fit QR v4 (33 modules). Scale 5 + 1-module quiet zone
+ * → 175 px on the 240 round panel — large enough to scan, still leaves room
+ * for title / manual code. Stored as LVGL 1-bit indexed (palette + bitmap)
+ * so BSS stays small on S3 without PSRAM (~4 KB vs ~61 KB RGB565).
+ */
+static constexpr int kQrVersion = 4;
+static constexpr int kQrScale = 5;
+static constexpr int kQrQuiet = 1; /* white modules around the symbol */
+static constexpr int kQrMaxPx = (4 * kQrVersion + 17 + 2 * kQrQuiet) * kQrScale;
+static constexpr int kQrStrideBytes = (kQrMaxPx + 7) / 8;
+/* 2 x lv_color32_t palette + 1bpp bitmap */
+static constexpr int kQrImgBytes = 8 + kQrStrideBytes * kQrMaxPx;
+
+static uint8_t s_qr_img_data[kQrImgBytes];
 #if LVGL_VERSION_MAJOR >= 9
 static lv_image_dsc_t s_qr_dsc = {};
 #else
@@ -78,9 +92,6 @@ static lv_img_dsc_t s_qr_dsc = {};
 static uint8_t s_qr_modules[256];
 static char s_qr_text[160] = {};
 static char s_manual_code[32] = {};
-
-static constexpr int kQrVersion = 4;
-static constexpr int kQrScale = 2;
 
 #if LVGL_VERSION_MAJOR >= 9
 #define UI_BTN_CREATE(parent) lv_button_create(parent)
@@ -97,11 +108,12 @@ static constexpr int kQrScale = 2;
 static void style_circle_screen(lv_obj_t *obj)
 {
     lv_obj_set_size(obj, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
-    lv_obj_set_style_bg_color(obj, lv_color_hex(0x101820), 0);
-    lv_obj_set_style_bg_grad_color(obj, lv_color_hex(0x1c2e3a), 0);
-    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
+    /* Pure black: high contrast for Matter QR scanning on the round LCD. */
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(obj, 0, 0);
-    lv_obj_set_style_pad_all(obj, 8, 0);
+    lv_obj_set_style_pad_all(obj, 4, 0);
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
 
@@ -161,17 +173,32 @@ static void draw_qr(const char *text)
     }
 
     const int size = qrcode.size;
-    const int px = size * kQrScale;
-    if (px > 80) {
-        ESP_LOGW(TAG, "QR too large for buffer: %d", px);
+    const int px = (size + 2 * kQrQuiet) * kQrScale;
+    if (px <= 0 || px > kQrMaxPx) {
+        ESP_LOGW(TAG, "QR too large for buffer: %d (max %d)", px, kQrMaxPx);
         return;
     }
 
-    const uint16_t white = 0xFFFF;
-    const uint16_t black = 0x0000;
-    for (int i = 0; i < px * px; ++i) {
-        s_qr_pixels[i] = white;
-    }
+    const int stride = (px + 7) / 8;
+    uint8_t *palette = s_qr_img_data;
+    uint8_t *bitmap = s_qr_img_data + 8;
+
+    /* LVGL indexed palette: lv_color32_t {B,G,R,A}. Index 0 = white. */
+    palette[0] = 0xFF;
+    palette[1] = 0xFF;
+    palette[2] = 0xFF;
+    palette[3] = 0xFF;
+    palette[4] = 0x00;
+    palette[5] = 0x00;
+    palette[6] = 0x00;
+    palette[7] = 0xFF;
+
+    std::memset(bitmap, 0x00, static_cast<size_t>(stride * px)); /* all white */
+
+    auto set_black = [&](int x, int y) {
+        const int byte_index = y * stride + (x >> 3);
+        bitmap[byte_index] |= static_cast<uint8_t>(0x80 >> (x & 7));
+    };
 
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
@@ -179,9 +206,11 @@ static void draw_qr(const char *text)
                                   static_cast<uint8_t>(y))) {
                 continue;
             }
+            const int x0 = (x + kQrQuiet) * kQrScale;
+            const int y0 = (y + kQrQuiet) * kQrScale;
             for (int dy = 0; dy < kQrScale; ++dy) {
                 for (int dx = 0; dx < kQrScale; ++dx) {
-                    s_qr_pixels[(y * kQrScale + dy) * px + (x * kQrScale + dx)] = black;
+                    set_black(x0 + dx, y0 + dy);
                 }
             }
         }
@@ -189,19 +218,19 @@ static void draw_qr(const char *text)
 
 #if LVGL_VERSION_MAJOR >= 9
     s_qr_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-    s_qr_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_qr_dsc.header.cf = LV_COLOR_FORMAT_I1;
     s_qr_dsc.header.w = px;
     s_qr_dsc.header.h = px;
-    s_qr_dsc.header.stride = px * 2;
-    s_qr_dsc.data_size = static_cast<uint32_t>(px * px * 2);
-    s_qr_dsc.data = reinterpret_cast<const uint8_t *>(s_qr_pixels);
+    s_qr_dsc.header.stride = stride;
+    s_qr_dsc.data_size = static_cast<uint32_t>(8 + stride * px);
+    s_qr_dsc.data = s_qr_img_data;
 #else
     s_qr_dsc.header.always_zero = 0;
     s_qr_dsc.header.w = px;
     s_qr_dsc.header.h = px;
-    s_qr_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-    s_qr_dsc.data_size = px * px * sizeof(uint16_t);
-    s_qr_dsc.data = reinterpret_cast<const uint8_t *>(s_qr_pixels);
+    s_qr_dsc.header.cf = LV_IMG_CF_INDEXED_1BIT;
+    s_qr_dsc.data_size = 8 + stride * px;
+    s_qr_dsc.data = s_qr_img_data;
 #endif
     UI_IMAGE_SET_SRC(s_qr_img, &s_qr_dsc);
 }
@@ -234,16 +263,30 @@ static void show_pairing(void)
     refresh_onboarding_codes();
     draw_qr(s_qr_text);
 
+    /* Compact chrome so the QR dominates the round viewport for scanning. */
     lv_label_set_text(s_title, s->pairing_title);
-    lv_label_set_text(s_subtitle, s->pairing_hint);
+    lv_obj_set_style_text_color(s_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 8);
+
+    /* Hint is secondary; keep it off the first paint to free vertical space. */
+    lv_label_set_text(s_subtitle, "");
+    lv_obj_add_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, -4);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_set_style_text_color(s_code_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Top-left avoids overlapping the title and the bottom pairing code. */
     if (s_lang_btn) {
+        lv_obj_align(s_lang_btn, LV_ALIGN_TOP_LEFT, 4, 4);
         lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
     }
 
     char line[64];
-    std::snprintf(line, sizeof(line), "%s\n%s", s->manual_code, s_manual_code);
+    std::snprintf(line, sizeof(line), "%s %s", s->manual_code, s_manual_code);
     lv_label_set_text(s_code_label, line);
 }
 
@@ -256,7 +299,12 @@ static void show_pairing_busy(void)
     if (s_lang_btn) {
         lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_set_style_text_color(s_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 72);
     lv_label_set_text(s_title, s->pairing_busy_title);
+    lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(0xC8D4DE), 0);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 110);
     lv_label_set_text(s_subtitle, s->pairing_busy_hint);
     if (s_qr_img) {
 #if LVGL_VERSION_MAJOR >= 9
@@ -267,10 +315,26 @@ static void show_pairing_busy(void)
     }
 }
 
+static void restore_default_chrome(void)
+{
+    lv_obj_set_style_text_color(s_title, lv_color_hex(0xE8F1F8), 0);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(0x9BB4C4), 0);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 38);
+    if (s_lang_btn) {
+        lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
+    }
+    lv_obj_set_style_text_color(s_code_label, lv_color_hex(0xD0E4F0), 0);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, -6);
+}
+
 static void show_learn(void)
 {
     const ui_strings_t *s = ui_strings(s_english.load());
     hide_all_controls();
+    restore_default_chrome();
     lv_label_set_text(s_title, s->learn_title);
     lv_label_set_text(s_subtitle, s->learn_hint);
     lv_obj_clear_flag(s_btn_primary, LV_OBJ_FLAG_HIDDEN);
@@ -282,6 +346,7 @@ static void show_ac(void)
 {
     const ui_strings_t *s = ui_strings(s_english.load());
     hide_all_controls();
+    restore_default_chrome();
 
     int temp = 25;
     bool power = false;
@@ -297,7 +362,7 @@ static void show_ac(void)
 
     lv_label_set_text(s_btn_power_label, power ? s->power_off : s->power_on);
     char tbuf[16];
-    std::snprintf(tbuf, sizeof(tbuf), "%d°", temp);
+    std::snprintf(tbuf, sizeof(tbuf), "%dC", temp);
     lv_label_set_text(s_temp_label, tbuf);
     lv_label_set_text(s_hint, s->swipe_hint);
 
@@ -315,6 +380,7 @@ static void show_light(void)
 {
     const ui_strings_t *s = ui_strings(s_english.load());
     hide_all_controls();
+    restore_default_chrome();
     lv_label_set_text(s_title, s->light_title);
     lv_label_set_text(s_subtitle, s->swipe_hint_settings);
     lv_obj_clear_flag(s_mode_list, LV_OBJ_FLAG_HIDDEN);
@@ -356,6 +422,7 @@ static void show_settings(void)
 {
     const ui_strings_t *s = ui_strings(s_english.load());
     hide_all_controls();
+    restore_default_chrome();
 
     if (!s_settings_rebooting.load()) {
         s_home_mode_pending = app_settings_get_home_display_mode();
@@ -568,13 +635,19 @@ static void on_gesture(lv_event_t *e)
 
 static void build_ui(void)
 {
-    s_root = lv_obj_create(UI_SCREEN_ACTIVE());
+    lv_obj_t *scr = UI_SCREEN_ACTIVE();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+
+    s_root = lv_obj_create(scr);
     style_circle_screen(s_root);
     lv_obj_center(s_root);
     lv_obj_add_event_cb(s_root, on_gesture, LV_EVENT_GESTURE, nullptr);
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     s_title = make_label(s_root, &ui_font_cn_20, 0xE8F1F8);
+    lv_obj_set_width(s_title, 180);
+    lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 10);
 
     s_subtitle = make_label(s_root, &ui_font_cn_16, 0x9BB4C4);
@@ -795,7 +868,7 @@ esp_err_t ui_show_commissioning_busy(void)
     }
 
     apply_screen(ui_screen_t::PAIRING_BUSY);
-    std::memset(s_qr_pixels, 0, sizeof(s_qr_pixels));
+    std::memset(s_qr_img_data, 0, sizeof(s_qr_img_data));
     std::memset(s_qr_text, 0, sizeof(s_qr_text));
     std::memset(s_manual_code, 0, sizeof(s_manual_code));
 

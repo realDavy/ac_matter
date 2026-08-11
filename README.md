@@ -402,6 +402,8 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 | 端点创建失败 / 湿度或灯不出现 / 启动 abort 重启 | 确认 `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT≥8` 后重新 `fullclean` + 编译；串口若见 bridged/aggregator 创建失败即为此项 |
 | 想让空调和灯分开/合并 | 屏上左滑到灯光再左滑进入**组件设置**，选「分开显示」或「组合显示」→ 应用并重启 → Home 中删除旧配件后重新配对 |
 | 看不到 Matter 配对码 | 设备必须稳定跑过 `esp_matter::start`；配网页在圆屏，串口会打 `UI Matter code:` / CHIP onboarding QR |
+| 屏上二维码扫不上 | 配网页 QR 约 175px（黑底白码）；请正对圆屏、关闭强光反射；也可直接输入屏上数字配对码 |
+| 屏上文字花屏/色带 | 确认固件启用了 `CONFIG_LV_COLOR_16_SWAP`（GC9A01 SPI 必需）；重刷后再看配网页 |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
 | 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |

@@ -67,4 +67,7 @@ CONFIG_WS2812_GPIO=10
 
 # LVGL (via esp_lvgl_port)
 CONFIG_LV_COLOR_DEPTH_16=y
+# GC9A01 SPI needs RGB565 byte swap; without this, gradients and AA fonts
+# render as colored bands / garbled glyphs while pure B/W QR still looks OK.
+CONFIG_LV_COLOR_16_SWAP=y
 CONFIG_LV_USE_FONT_PLACEHOLDER=y
