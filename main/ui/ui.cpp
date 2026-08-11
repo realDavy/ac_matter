@@ -70,12 +70,12 @@ static std::atomic<bool> s_settings_rebooting{false};
 static TickType_t s_reboot_at_tick = 0;
 
 /*
- * Matter MT: payloads fit QR v4 (33 modules). Scale 3 + 2-module quiet zone
- * → 111 px: leaves clear gaps for title/hint above and pairing code below on
- * the 1.28" round panel. 1-bit indexed keeps BSS small.
+ * Matter MT: payloads fit QR v4 (33 modules). Scale 2 + 2-module quiet zone
+ * → 74 px: still scannable up close, leaves room for fully visible title /
+ * hint / centered pairing code on the 1.28" round panel.
  */
 static constexpr int kQrVersion = 4;
-static constexpr int kQrScale = 3;
+static constexpr int kQrScale = 2;
 static constexpr int kQrQuiet = 2; /* white modules around the symbol */
 static constexpr int kQrMaxPx = (4 * kQrVersion + 17 + 2 * kQrQuiet) * kQrScale;
 static constexpr int kQrStrideBytes = (kQrMaxPx + 7) / 8;
@@ -295,36 +295,45 @@ static void show_pairing(void)
     draw_qr(s_qr_text);
 
     /*
-     * Circular safe layout (r=120): at y≈20 usable width ≈ 130px. Title must
-     * stay inside that chord and clear of the EN chip, or 「网」gets clipped.
+     * Round layout (r=120), top→bottom:
+     *   title (centered) → hint → QR (74px) → 配对码 + digits (centered)
+     * EN sits inset top-right and must not steal title width.
      */
     lv_obj_set_style_text_font(s_title, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
-    lv_obj_set_width(s_title, 118);
+    lv_obj_set_width(s_title, 112);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_title, s->pairing_title);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -16, 18);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 16);
 
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
     lv_obj_set_width(s_subtitle, 168);
     lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_subtitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_subtitle, s->pairing_hint);
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 42);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
 
-    /* 111px QR: keep a clear gap under the hint so glyphs are not clipped. */
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 14);
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, -2);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_set_style_text_font(s_code_label, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
-    lv_obj_set_width(s_code_label, 168);
+    lv_obj_set_width(s_code_label, 180);
     lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_style_text_align(s_code_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -18);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
-    place_lang_btn();
+    /* EN inset on the title row; title width leaves a gap so neither is clipped. */
+    if (s_lang_btn) {
+        const bool english = s_english.load();
+        lv_obj_set_size(s_lang_btn, english ? 44 : 34, 24);
+        lv_obj_align(s_lang_btn, LV_ALIGN_TOP_RIGHT, -30, 16);
+        lv_obj_clear_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     char line[64];
     std::snprintf(line, sizeof(line), "%s\n%s", s->manual_code, s_manual_code);
