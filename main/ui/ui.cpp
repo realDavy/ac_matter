@@ -364,13 +364,15 @@ static void restore_default_chrome(void)
 {
     lv_obj_set_style_text_font(s_title, &ui_font_cn_22, 0);
     lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
-    lv_obj_set_width(s_title, 150);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -8, 14);
+    /* Keep titles inside the round safe chord; leave room for EN/中文. */
+    lv_obj_set_width(s_title, 130);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_CLIP);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, -14, 18);
     lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
-    lv_obj_set_width(s_subtitle, 180);
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_width(s_subtitle, 168);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 46);
     place_lang_btn();
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
     lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -16);
