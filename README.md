@@ -405,7 +405,7 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 | 屏上二维码扫不上 | 配网页 QR 约 175px（黑底白码）；请正对圆屏、关闭强光反射；也可直接输入屏上数字配对码 |
 | 屏上文字花屏/色带 | 确认固件启用了 `CONFIG_LV_COLOR_16_SWAP`（GC9A01 SPI 必需）；重刷后再看配网页 |
 | 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
-| 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉 |
+| 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉；日志看 `it7259` probe。固件需按 ITE 手册解析 Query bit7/坐标打包 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |
 | 有学习但空调不动 | 查 GPIO5 驱动电路与发射管方向/电流；试 Alt 遍历换协议 |
 | 日志 `SHT30 not available` | 检查 SDA/SCL/ADDR/供电与上拉；无传感器属正常降级 |

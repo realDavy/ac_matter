@@ -2,15 +2,26 @@
 #include "board_pins.h"
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <atomic>
 
 static const char *TAG = "board_i2c";
 static std::atomic<bool> s_ready{false};
+static SemaphoreHandle_t s_lock = nullptr;
 
 esp_err_t board_i2c_init(void)
 {
     if (s_ready.load()) {
         return ESP_OK;
+    }
+
+    if (s_lock == nullptr) {
+        s_lock = xSemaphoreCreateMutex();
+        if (s_lock == nullptr) {
+            ESP_LOGE(TAG, "Failed to create I2C mutex");
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     i2c_config_t conf = {};
@@ -53,4 +64,18 @@ bool board_i2c_is_ready(void)
 i2c_port_t board_i2c_port(void)
 {
     return BOARD_I2C_PORT;
+}
+
+void board_i2c_lock(void)
+{
+    if (s_lock != nullptr) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+    }
+}
+
+void board_i2c_unlock(void)
+{
+    if (s_lock != nullptr) {
+        xSemaphoreGive(s_lock);
+    }
 }

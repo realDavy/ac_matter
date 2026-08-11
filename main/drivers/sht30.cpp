@@ -63,7 +63,9 @@ static esp_err_t sht30_write_command(const uint8_t cmd[2])
     i2c_master_write_byte(handle, (SHT30_SENSOR_ADDR << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write(handle, const_cast<uint8_t *>(cmd), 2, true);
     i2c_master_stop(handle);
+    board_i2c_lock();
     esp_err_t err = i2c_master_cmd_begin(I2C_MASTER_NUM, handle, pdMS_TO_TICKS(1000));
+    board_i2c_unlock();
     i2c_cmd_link_delete(handle);
     return err;
 }
@@ -90,7 +92,9 @@ static esp_err_t sht30_measure(float *temperature_c, float *humidity_pct)
     i2c_master_write_byte(handle, (SHT30_SENSOR_ADDR << 1) | I2C_MASTER_READ, true);
     i2c_master_read(handle, data, sizeof(data), I2C_MASTER_LAST_NACK);
     i2c_master_stop(handle);
+    board_i2c_lock();
     err = i2c_master_cmd_begin(I2C_MASTER_NUM, handle, pdMS_TO_TICKS(1000));
+    board_i2c_unlock();
     i2c_cmd_link_delete(handle);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "read failed: %s", esp_err_to_name(err));
