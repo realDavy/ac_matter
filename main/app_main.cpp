@@ -988,8 +988,12 @@ static void app_start_pairing_display(void)
 
     ESP_LOGI(TAG, "Starting pairing display (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
-    (void)chip::DeviceLayer::SystemLayer().CancelTimer(app_clear_pairing_fail_tip,
-                                                       nullptr);
+    /*
+     * Do NOT touch SystemLayer here: app_main() calls this off the CHIP stack,
+     * and CancelTimer/StartTimer without the stack lock aborts (chipDie) —
+     * reboot loop with a blank LCD. Clear the UI flag only; any pending fail
+     * tip timer is cancelled from CHIP-stack paths in after_fail / clear tip.
+     */
     ui_clear_commissioning_failed();
     app_start_display_ui();
 }
@@ -997,6 +1001,7 @@ static void app_start_pairing_display(void)
 /*
  * After a cancelled / failed attempt: show the fail tip briefly
  * ("请重新配网 / 请用2.4G WiFi"), then return to the pairing QR.
+ * Caller must already be on the CHIP stack (ScheduleWork / event path).
  */
 static void app_start_pairing_display_after_fail(void)
 {
