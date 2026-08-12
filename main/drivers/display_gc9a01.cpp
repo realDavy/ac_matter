@@ -133,7 +133,7 @@ static void backlight_init(void)
 
 /*
  * Fill GRAM with black before DISPON / backlight so residual random pixels are
- * never visible if the backlight leaks slightly during bring-up.
+ * never visible when the backlight comes up.
  */
 static esp_err_t display_clear_gram_black(void)
 {
