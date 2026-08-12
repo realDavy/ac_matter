@@ -76,7 +76,7 @@ static bool s_chipoble_connected = false;
  */
 static bool s_pending_post_commission_ui = false;
 
-static constexpr const char *k_device_name = "AC Remote";
+static constexpr const char *k_device_name = "Air Conditioner";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
 static char s_serial_number[k_serial_buf_size] = {};
 
@@ -218,7 +218,10 @@ static void app_expose_serial_number(node_t *node, char *serial)
     ESP_LOGI(TAG, "SerialNumber attribute created: \"%s\"", serial);
 }
 
-/** Set default NodeLabel so controllers show "AC Remote" before the user renames it. */
+/**
+ * Set default NodeLabel so controllers show "Air Conditioner" before the user
+ * renames it. Refresh known old stock names; leave custom user labels alone.
+ */
 static void app_set_default_node_label(node_t *node)
 {
     if (node == nullptr) {
@@ -246,9 +249,23 @@ static void app_set_default_node_label(node_t *node)
 
     esp_matter_attr_val_t current = {};
     if (attribute::get_val(node_label, &current) == ESP_OK &&
-        current.val.a.s > 0) {
-        ESP_LOGI(TAG, "NodeLabel already set; leaving unchanged");
-        return;
+        current.val.a.s > 0 && current.val.a.b != nullptr) {
+        char existing[64] = {};
+        const size_t copy_len =
+            std::min(sizeof(existing) - 1, static_cast<size_t>(current.val.a.s));
+        std::memcpy(existing, current.val.a.b, copy_len);
+        existing[copy_len] = '\0';
+
+        const bool stock_name =
+            std::strcmp(existing, k_device_name) == 0 ||
+            std::strcmp(existing, "AC Remote") == 0 ||
+            std::strcmp(existing, "Air AC Remote") == 0 ||
+            std::strcmp(existing, "Matter Accessory") == 0;
+        if (!stock_name) {
+            ESP_LOGI(TAG, "NodeLabel already set to \"%s\"; leaving unchanged",
+                     existing);
+            return;
+        }
     }
 
     char name[32];

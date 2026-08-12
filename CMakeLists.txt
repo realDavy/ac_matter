@@ -65,8 +65,8 @@ idf_build_set_property(CXX_COMPILE_OPTIONS "-Wno-maybe-uninitialized" APPEND)
 
 # Matter Basic Information identity (Manufacturer / ProductName)
 idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME=\"aidaegis\"" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME=\"AC Remote\"" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_NAME=\"AC Remote\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME=\"Air Conditioner\"" APPEND)
+idf_build_set_property(COMPILE_OPTIONS "-DCHIP_DEVICE_CONFIG_DEVICE_NAME=\"Air Conditioner\"" APPEND)
 
 # GC9A01 SPI: force RGB565 byte-swap even if a local sdkconfig left it off.
 # Without this, bpp4/8 AA fonts show cyan/magenta fringing and look “缺笔画”.
