@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <memory>
+#include <new>
 #include <string>
 #include <cmath>
 #include <climits>
@@ -528,8 +529,11 @@ static TickType_t s_ir_pairing_last_rearm_tick = 0;
 static constexpr uint32_t k_ir_learn_timeout_ms = 60000;
 static constexpr uint32_t k_ir_learn_wait_log_ms = 5000;
 static constexpr uint32_t k_ir_learn_rearm_ms = 500;
+/* After a successful learn, wait before arming continuous RX/parse. */
+static constexpr uint32_t k_ir_parse_settle_ms = 750;
 static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
+static TickType_t s_ir_parse_earliest_tick = 0;
 static std::atomic_bool s_ir_last_clear_success{false};
 static std::atomic_bool s_ir_alt_traversal_active{false};
 
@@ -910,31 +914,33 @@ static void app_matter_schedule_report_all_temperatures(
         return;
     }
 
-    CHIP_ERROR err = chip::DeviceLayer::SystemLayer().ScheduleLambda([]() {
-        const int16_t temp_x100 =
-            s_pending_temp_x100.load(std::memory_order_relaxed);
-        s_temp_report_scheduled.store(false, std::memory_order_release);
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        [](intptr_t) {
+            const int16_t temp_x100 =
+                s_pending_temp_x100.load(std::memory_order_relaxed);
+            s_temp_report_scheduled.store(false, std::memory_order_release);
 
-        esp_err_t report_err =
-            app_matter_report_all_temperatures_now(temp_x100);
-        if (report_err != ESP_OK) {
-            ESP_LOGE(TAG,
-                     "Scheduled temperature synchronization failed: %s",
-                     esp_err_to_name(report_err));
-        }
+            esp_err_t report_err =
+                app_matter_report_all_temperatures_now(temp_x100);
+            if (report_err != ESP_OK) {
+                ESP_LOGE(TAG,
+                         "Scheduled temperature synchronization failed: %s",
+                         esp_err_to_name(report_err));
+            }
 
-        /* One follow-up if the setpoint changed while we were reporting. */
-        const int16_t latest =
-            s_pending_temp_x100.load(std::memory_order_relaxed);
-        if (latest != temp_x100) {
-            app_matter_schedule_report_all_temperatures(latest);
-        }
-    });
+            /* One follow-up if the setpoint changed while we were reporting. */
+            const int16_t latest =
+                s_pending_temp_x100.load(std::memory_order_relaxed);
+            if (latest != temp_x100) {
+                app_matter_schedule_report_all_temperatures(latest);
+            }
+        },
+        0);
 
     if (err != CHIP_NO_ERROR) {
         s_temp_report_scheduled.store(false, std::memory_order_release);
         ESP_LOGW(TAG,
-                 "ScheduleLambda for temperature sync failed: %" CHIP_ERROR_FORMAT,
+                 "ScheduleWork for temperature sync failed: %" CHIP_ERROR_FORMAT,
                  err.Format());
     }
 }
@@ -1027,12 +1033,31 @@ static void app_matter_schedule_whole_device_state(
     bool power_on,
     int mode)
 {
-    chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [power_on, mode]() {
+    struct WholeArgs {
+        bool power_on;
+        int mode;
+    };
+    auto *args = new (std::nothrow) WholeArgs{power_on, mode};
+    if (args == nullptr) {
+        ESP_LOGE(TAG, "No heap to schedule whole-device state");
+        return;
+    }
+
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        [](intptr_t arg) {
+            auto *state = reinterpret_cast<WholeArgs *>(arg);
             app_matter_update_whole_device_state_now(
-                power_on,
-                mode);
-        });
+                state->power_on, state->mode);
+            delete state;
+        },
+        reinterpret_cast<intptr_t>(args));
+
+    if (err != CHIP_NO_ERROR) {
+        delete args;
+        ESP_LOGW(TAG,
+                 "ScheduleWork for whole-device state failed: %" CHIP_ERROR_FORMAT,
+                 err.Format());
+    }
 }
 
 /*
@@ -1137,13 +1162,36 @@ static void app_matter_schedule_parsed_ac_state(
     int mode,
     bool power_on)
 {
-    chip::DeviceLayer::SystemLayer().ScheduleLambda(
-        [temp_c, mode, power_on]() {
+    /*
+     * IR worker is not the CHIP thread. Prefer PlatformMgr::ScheduleWork so
+     * we never touch SystemLayer off-stack (boot/learn crashes).
+     */
+    struct ParsedArgs {
+        int temp_c;
+        int mode;
+        bool power_on;
+    };
+    auto *args = new (std::nothrow) ParsedArgs{temp_c, mode, power_on};
+    if (args == nullptr) {
+        ESP_LOGE(TAG, "No heap to schedule parsed AC state");
+        return;
+    }
+
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        [](intptr_t arg) {
+            auto *parsed = reinterpret_cast<ParsedArgs *>(arg);
             app_matter_apply_parsed_ac_state_now(
-                temp_c,
-                mode,
-                power_on);
-        });
+                parsed->temp_c, parsed->mode, parsed->power_on);
+            delete parsed;
+        },
+        reinterpret_cast<intptr_t>(args));
+
+    if (err != CHIP_NO_ERROR) {
+        delete args;
+        ESP_LOGW(TAG,
+                 "ScheduleWork for parsed AC state failed: %" CHIP_ERROR_FORMAT,
+                 err.Format());
+    }
 }
 
 /*
@@ -1575,6 +1623,13 @@ static void app_driver_ir_worker_handle_pairing()
             if (!app_driver_ir_save_pairing()) {
                 ESP_LOGW(TAG_IR, "Pairing succeeded but NVS save failed");
             }
+
+            /*
+             * Let UI leave LEARN→AC and let RMT finish disable/enable before
+             * continuous parse RX is armed (avoids post-learn LoadProhibited).
+             */
+            s_ir_parse_earliest_tick =
+                xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_parse_settle_ms);
         } else {
             s_ac->clear_pairing();
             s_ac->init_ok = s_ac->ready();
@@ -1666,9 +1721,19 @@ static void app_driver_ir_worker_handle_parsing(bool &parsing_was_enabled)
         return;
     }
 
+    if (s_ir_parse_earliest_tick != 0 &&
+        xTaskGetTickCount() < s_ir_parse_earliest_tick) {
+        return;
+    }
+    s_ir_parse_earliest_tick = 0;
+
     if (s_ir_worker_state == ir_worker_state_t::STOPPED ||
         s_ir_worker_state == ir_worker_state_t::IDLE) {
         s_ac->start_capture();
+        if (!s_ac->capture_armed()) {
+            ESP_LOGW(TAG_IR, "IR parsing RX arm failed; will retry");
+            return;
+        }
         s_ir_worker_state = ir_worker_state_t::PARSING;
         ESP_LOGI(TAG_IR, "IR parsing RX armed");
         return;
@@ -2043,6 +2108,9 @@ static bool app_driver_ir_load_pairing()
     s_ir_match_index = saved.alt_index;
     s_ac->init_ok = true;
     s_ir_paired.store(true);
+    /* Avoid arming continuous IR RX while Matter is still bringing up. */
+    s_ir_parse_earliest_tick =
+        xTaskGetTickCount() + pdMS_TO_TICKS(2000);
 
     ESP_LOGI(TAG_IR,
              "IR pairing restored: protocol=%s model=%d alt_index=%u",
@@ -2204,16 +2272,24 @@ void app_driver_ui_set_light_brightness(uint8_t level_1_254)
     }
     ws2812_temp_light_set_brightness(level_1_254);
 
-    chip::DeviceLayer::SystemLayer().ScheduleLambda([level_1_254]() {
-        esp_matter_attr_val_t val = esp_matter_nullable_uint8(level_1_254);
-        s_matter_syncing_from_local = true;
-        attribute::update(
-            temp_light_endpoint_id,
-            LevelControl::Id,
-            LevelControl::Attributes::CurrentLevel::Id,
-            &val);
-        s_matter_syncing_from_local = false;
-    });
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        [](intptr_t arg) {
+            const uint8_t level = static_cast<uint8_t>(arg);
+            esp_matter_attr_val_t val = esp_matter_nullable_uint8(level);
+            s_matter_syncing_from_local = true;
+            attribute::update(
+                temp_light_endpoint_id,
+                LevelControl::Id,
+                LevelControl::Attributes::CurrentLevel::Id,
+                &val);
+            s_matter_syncing_from_local = false;
+        },
+        static_cast<intptr_t>(level_1_254));
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG,
+                 "ScheduleWork for light brightness failed: %" CHIP_ERROR_FORMAT,
+                 err.Format());
+    }
 }
 
 
@@ -2507,24 +2583,15 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
      *   Room AC OnOff         = Off
      *   Thermostat SystemMode = Off
      *   IR fan                = Auto (not exposed over Matter)
+     *
+     * Do NOT queue a physical IR Off here. When a protocol such as BOSCH144
+     * is already paired, encode+RMT during Matter start races the CHIP event
+     * queue (null-queue assert / "Failed to post event") and boot-loops.
+     * Controllers / the on-device UI still send IR via the normal path.
      */
     PowerOn = false;
     Mode = 1;
     Fan = 0;
-
-    /*
-     * Also request a physical AC Off command. The worker serializes this
-     * transmit operation with parsing and pairing.
-     */
-    esp_err_t initial_off_err =
-        app_driver_ir_queue_power(false);
-
-    if (initial_off_err != ESP_OK) {
-        ESP_LOGW(
-            TAG_IR,
-            "Failed to queue initial AC Off command: %s",
-            esp_err_to_name(initial_off_err));
-    }
 
     s_matter_syncing_from_local = true;
 
@@ -2708,6 +2775,22 @@ app_driver_handle_t app_driver_button_init()
 
 void app_driver_update_led_states()
 {
+    /*
+     * FabricTable / InteractionModelEngine must only be touched on the CHIP
+     * stack. The IR worker used to call this directly after learn/clear and
+     * could LoadProhibited (null IM engine fields) or corrupt CHIP state.
+     */
+    if (!chip::DeviceLayer::PlatformMgr().IsChipStackLockedByCurrentThread()) {
+        CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
+            [](intptr_t) { app_driver_update_led_states(); }, 0);
+        if (err != CHIP_NO_ERROR) {
+            ESP_LOGW(TAG,
+                     "Deferred LED update schedule failed: %" CHIP_ERROR_FORMAT,
+                     err.Format());
+        }
+        return;
+    }
+
 	app_matter_state_t matter_state;
 
     /*

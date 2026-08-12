@@ -45,6 +45,9 @@ static bool IRAM_ATTR rx_done_callback(rmt_channel_handle_t,
 {
     BaseType_t high_task_wakeup = pdFALSE;
     auto *queue = static_cast<QueueHandle_t>(user_data);
+    if (queue == nullptr || edata == nullptr) {
+        return false;
+    }
     RxDoneMsg msg = {};
     msg.num_symbols = edata->num_symbols;
     xQueueSendFromISR(queue, &msg, &high_task_wakeup);
@@ -262,7 +265,7 @@ esp_err_t rmt_ir_transmit(const std::vector<int> &timings_us,
 
 esp_err_t rmt_ir_start_receive()
 {
-    if (s_rx == nullptr) {
+    if (s_rx == nullptr || s_rx_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 

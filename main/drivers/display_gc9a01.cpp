@@ -360,7 +360,13 @@ static esp_err_t display_start_lvgl(void)
      * tight for bpp8 CJK + QR first paint (stack smash → blank forever).
      */
     lvgl_cfg.task_stack = 6144;
-    ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
+    esp_err_t lvgl_err = lvgl_port_init(&lvgl_cfg);
+    if (lvgl_err != ESP_OK) {
+        ESP_LOGE(TAG, "lvgl_port_init failed: %s (heap=%u) — UI deferred",
+                 esp_err_to_name(lvgl_err),
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        return lvgl_err;
+    }
 
     /*
      * Prefer a single smaller draw buffer. After Matter PASE free heap is often
