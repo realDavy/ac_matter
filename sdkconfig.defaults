@@ -52,6 +52,7 @@ CONFIG_ENABLE_OTA_REQUESTOR=y
 CONFIG_CHIP_PROJECT_CONFIG="main/CHIPProjectConfig.h"
 
 # Disable hardcoded test serial; app generates one (random + MAC suffix)
+# and creates the optional Basic Information SerialNumber attribute.
 CONFIG_USE_TEST_SERIAL_NUMBER=""
 
 # Per-device pairing codes via custom CommissionableDataProvider.
