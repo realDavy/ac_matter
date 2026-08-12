@@ -517,8 +517,18 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "CHIPoBLE connection closed");
         s_chipoble_connected = false;
         app_schedule_work([](intptr_t /*arg*/) {
-            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0 &&
-                !s_commissioning_in_progress) {
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                /*
+                 * Uncommissioned + BLE gone ⇒ phone cancelled or PASE dropped.
+                 * Restore the pairing QR immediately. Waiting for
+                 * kCommissioningSessionStopped / kFailSafeTimerExpired can take
+                 * up to ~60s (Matter fail-safe after PASE) while the panel is
+                 * stuck on the frozen "配对中..." frame.
+                 */
+                if (s_commissioning_in_progress) {
+                    s_commissioning_in_progress = false;
+                    app_driver_update_led_states();
+                }
                 app_start_pairing_display();
             } else {
                 /* BLE heap is back; safe to bring up the normal UI. */
@@ -556,9 +566,20 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
         ESP_LOGI(TAG, "Commissioning session stopped");
         s_commissioning_in_progress = false;
-        /* Failed session → pairing QR; success → resume deferred normal UI. */
+        app_driver_update_led_states();
+        /*
+         * Failed / cancelled session → pairing QR; success → resume deferred
+         * normal UI. If CHIPoBLE is still up, wait for kCHIPoBLEConnectionClosed
+         * so LVGL init has enough heap (same path restores the QR promptly).
+         */
         app_schedule_work([](intptr_t /*arg*/) {
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+                if (s_chipoble_connected) {
+                    ESP_LOGI(TAG,
+                             "Session stopped without fabric; defer pairing UI "
+                             "until CHIPoBLE closes (heap)");
+                    return;
+                }
                 app_start_pairing_display();
             } else {
                 app_try_start_pending_post_commission_ui();
