@@ -11,7 +11,6 @@
 #include "IRsend.h"
 #include "IRutils.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "rmt_ir.hpp"
 
 /* Provided by IRsend.cpp when SWIGLIB is defined. */
@@ -371,9 +370,8 @@ bool IrAcController::decode_frame_to_state_(AcLogicalState *logical,
         return false;
     }
 
-    ESP_LOGI(TAG, "Decoding IR frame: %u timings, free heap=%u",
-             static_cast<unsigned>(timings_us.size()),
-             static_cast<unsigned>(esp_get_free_heap_size()));
+    ESP_LOGI(TAG, "Decoding IR frame: %u timings",
+             static_cast<unsigned>(timings_us.size()));
 
     /*
      * Keep decode_results off the IR worker stack — AC decode walks many
