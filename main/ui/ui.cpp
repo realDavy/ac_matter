@@ -970,24 +970,27 @@ esp_err_t ui_init(void)
     s_screen = ui_screen_t::PAIRING;
     s_ui_backlight_hold = false;
 
-    if (lvgl_port_lock(1000)) {
-        build_ui();
-        apply_screen(decide_screen());
-        if (s_root) {
-            lv_obj_invalidate(s_root);
-        }
-        /* Push the first real frame into GRAM before enabling backlight. */
-        lv_refr_now(display_get_disp());
-        apply_backlight_hold_for_screen(s_screen);
-        if (!display_is_backlight_on()) {
-            display_activity_notify();
-        }
-        lvgl_port_unlock();
+    if (!lvgl_port_lock(1000)) {
+        ESP_LOGE(TAG, "LVGL lock timeout during ui_init");
+        return ESP_ERR_TIMEOUT;
     }
 
+    build_ui();
+    apply_screen(decide_screen());
+    if (s_root) {
+        lv_obj_invalidate(s_root);
+    }
+    /* Push the first real frame; backlight is already on (black GRAM). */
+    lv_refr_now(display_get_disp());
+    apply_backlight_hold_for_screen(s_screen);
+    if (!display_is_backlight_on()) {
+        display_set_backlight(true);
+    }
+    lvgl_port_unlock();
+
     s_stop_task.store(false);
-    /* Pairing / AC refresh loops are light; keep stack small for PASE heap. */
-    if (xTaskCreate(ui_task, "ui_task", 4096, nullptr, 4, &s_task) != pdPASS) {
+    /* Pairing / AC refresh loops are light; keep stack modest for PASE heap. */
+    if (xTaskCreate(ui_task, "ui_task", 6144, nullptr, 4, &s_task) != pdPASS) {
         s_task = nullptr;
         return ESP_ERR_NO_MEM;
     }

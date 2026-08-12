@@ -312,12 +312,14 @@ static esp_err_t display_init_hw(void)
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X != 0,
                                          BOARD_LCD_MIRROR_Y != 0));
     /*
-     * Keep DISPON off until GRAM is black. Backlight stays off until the first
-     * LVGL frame is flushed (see ui_init) to avoid power-on snow/static.
+     * Clear GRAM before DISPON so residual random pixels are never lit.
+     * Enable backlight once the panel is solid black — do NOT wait for the
+     * first LVGL frame. If UI init/paint fails, waiting forever left the
+     * round LCD looking "dead" after flash.
      */
     (void)display_clear_gram_black();
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
-    display_set_backlight(false);
+    display_set_backlight(true);
 
     s_hw_ready = true;
     return ESP_OK;
@@ -353,8 +355,11 @@ static esp_err_t display_start_lvgl(void)
     heap_caps_free(probe);
 
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    /* Default 7168 is too heavy alongside Matter + CHIPoBLE on S3 without PSRAM. */
-    lvgl_cfg.task_stack = 4096;
+    /*
+     * Default 7168 is heavy with Matter on S3 without PSRAM, but 4096 was too
+     * tight for bpp8 CJK + QR first paint (stack smash → blank forever).
+     */
+    lvgl_cfg.task_stack = 6144;
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
     /*
@@ -455,12 +460,9 @@ static esp_err_t display_start_lvgl(void)
         }
     }
 
-    /*
-     * Do not enable backlight here — GRAM still has no UI frame. ui_init()
-     * flushes the first paint, then turns the backlight on.
-     */
+    /* Backlight already on after black GRAM clear in display_init_hw(). */
     s_ready = true;
-    ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d), backlight deferred",
+    ESP_LOGI(TAG, "GC9A01 + LVGL ready (%dx%d), backlight on",
              BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     return ESP_OK;
 }
