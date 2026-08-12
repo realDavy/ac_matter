@@ -461,6 +461,9 @@ bool IrAcController::pair_from_capture()
 
 bool IrAcController::parse_capture(AcLogicalState *out)
 {
+    /* Drop any in-flight RX before consuming the frame (same as pair path). */
+    stop_capture();
+
     AcLogicalState state{};
     AcPairingInfo info{};
     if (!decode_frame_to_state_(&state, &info)) {

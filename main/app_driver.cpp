@@ -530,7 +530,7 @@ static constexpr uint32_t k_ir_learn_timeout_ms = 60000;
 static constexpr uint32_t k_ir_learn_wait_log_ms = 5000;
 static constexpr uint32_t k_ir_learn_rearm_ms = 500;
 /* After a successful learn, wait before arming continuous RX/parse. */
-static constexpr uint32_t k_ir_parse_settle_ms = 750;
+static constexpr uint32_t k_ir_parse_settle_ms = 2000;
 static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
 static TickType_t s_ir_parse_earliest_tick = 0;
@@ -714,6 +714,36 @@ void app_driver_set_subscription_active(bool active)
                  "Matter subscription state: %s",
                  active ? "active" : "inactive");
     }
+}
+
+/*
+ * LED indication from the IR worker only — never touch FabricTable /
+ * InteractionModelEngine here. Network-aware LED updates stay on the CHIP
+ * stack via app_driver_update_led_states().
+ */
+static void app_driver_ir_apply_local_led(void)
+{
+    if (s_factory_reset_in_progress.load() || s_factory_reset_armed.load()) {
+        app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
+        return;
+    }
+    if (s_ir_alt_traversal_active.load()) {
+        app_driver_led_set_static(false);
+        return;
+    }
+    if (s_ir_pairing.load()) {
+        app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
+        return;
+    }
+    if (s_ir_paired.load()) {
+        app_driver_led_set_mode(LED_MODE_BREATH_3S);
+        return;
+    }
+    if (s_matter_subscription_active.load()) {
+        app_driver_led_set_mode(LED_MODE_BLINK_1X_1HZ);
+        return;
+    }
+    app_driver_led_set_mode(LED_MODE_BLINK_1HZ);
 }
 
 /* Do any conversions/remapping for the actual value here */
@@ -1300,7 +1330,7 @@ static void app_driver_ir_worker_finish_alt_unpaired()
 
     app_driver_ir_alt_reset_tracking();
     app_driver_led_cancel_one_shot();
-    app_driver_update_led_states();
+    app_driver_ir_apply_local_led();
 
     ESP_LOGI(TAG_IR, "Alt traversal completed; device returned to unpaired state");
 }
@@ -1505,12 +1535,15 @@ static void app_driver_ir_worker_cancel_pairing()
 
     const bool pairing_restored = app_driver_ir_load_pairing();
     s_ir_paired.store(pairing_restored);
-    s_ir_worker_state =
-        pairing_restored ? ir_worker_state_t::IDLE : ir_worker_state_t::STOPPED;
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
+    if (pairing_restored && s_ir_parse_earliest_tick == 0) {
+        s_ir_parse_earliest_tick =
+            xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_parse_settle_ms);
+    }
 
     ESP_LOGI(TAG_IR, "IR pairing cancelled; load_pairing result: %s",
              pairing_restored ? "restored" : "unpaired");
-    app_driver_update_led_states();
+    app_driver_ir_apply_local_led();
 }
 
 static void app_driver_ir_worker_toggle_pairing()
@@ -1544,7 +1577,7 @@ static void app_driver_ir_worker_clear_pairing(const ir_command_t &command)
         xTaskNotifyGive(command.completion_task);
     }
 
-    app_driver_update_led_states();
+    app_driver_ir_apply_local_led();
 }
 
 static void app_driver_ir_worker_process_command(const ir_command_t &command)
@@ -1601,21 +1634,33 @@ static void app_driver_ir_worker_handle_pairing()
 
     if (s_ac->signal_captured()) {
         ESP_LOGI(TAG_IR, "IR signal captured for pairing; decoding protocol");
-        display_activity_notify();
 
         const bool ok = s_ac->pair_from_capture();
         s_ir_pairing.store(false);
         app_driver_ir_alt_reset_tracking();
 
+        /*
+         * pair_from_capture() already stopped RX. Keep RX unarmed and the
+         * worker STOPPED through the settle window so UI can leave LEARN and
+         * CHIP can process deferred LED/Matter work without racing RMT.
+         */
+        if (s_ac) {
+            s_ac->stop_capture();
+        }
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
+
         if (ok) {
+            /*
+             * Keep local power Off to match Matter defaults — do not imply the
+             * AC is running, and do not fire an IR TX from the learn path.
+             */
             Temp = 25;
             Mode = 1;
             Fan = 0;
-            PowerOn = true;
+            PowerOn = false;
             s_ir_match_index = 0;
             s_ir_paired.store(true);
             s_ac->init_ok = true;
-            s_ir_worker_state = ir_worker_state_t::IDLE;
 
             ESP_LOGI(TAG_IR, "IR AC pairing succeeded: protocol=%s",
                      s_ac->protocol_name());
@@ -1624,25 +1669,27 @@ static void app_driver_ir_worker_handle_pairing()
                 ESP_LOGW(TAG_IR, "Pairing succeeded but NVS save failed");
             }
 
-            /*
-             * Let UI leave LEARN→AC and let RMT finish disable/enable before
-             * continuous parse RX is armed (avoids post-learn LoadProhibited).
-             */
             s_ir_parse_earliest_tick =
                 xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_parse_settle_ms);
+
+            app_driver_ir_apply_local_led();
+            /* Matter attributes only — no IR transmit. */
+            app_matter_schedule_whole_device_state(false, Mode);
+            app_matter_schedule_report_all_temperatures(
+                static_cast<int16_t>(Temp * 100));
         } else {
             s_ac->clear_pairing();
             s_ac->init_ok = s_ac->ready();
             s_ir_paired.store(false);
-            s_ir_worker_state = ir_worker_state_t::STOPPED;
+            s_ir_parse_earliest_tick = 0;
 
             ESP_LOGW(TAG_IR,
                      "IR AC pairing failed after IR capture "
                      "(unsupported or unrecognized AC protocol)");
             app_driver_ir_erase_saved_pairing();
+            app_driver_ir_apply_local_led();
         }
 
-        app_driver_update_led_states();
         return;
     }
 
@@ -1659,17 +1706,15 @@ static void app_driver_ir_worker_handle_pairing()
 static void app_driver_ir_worker_parse_signal()
 {
     if (!s_ac) {
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
         return;
     }
-
-    /* Any captured AC-remote frame is activity — wake before parse result. */
-    display_activity_notify();
 
     ir_ac::AcLogicalState parsed{};
     if (!s_ac->parse_capture(&parsed)) {
         ESP_LOGW(TAG_IR,
                  "Captured IR signal could not be parsed as the paired AC protocol");
-        s_ir_worker_state = ir_worker_state_t::IDLE;
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
         return;
     }
 
@@ -1684,8 +1729,10 @@ static void app_driver_ir_worker_parse_signal()
              "Power=%d (kept IR Fan=Auto)",
              Temp, Mode, parsed.fan, static_cast<int>(PowerOn));
 
+    display_activity_notify();
     app_matter_schedule_parsed_ac_state(Temp, Mode, PowerOn);
-    s_ir_worker_state = ir_worker_state_t::IDLE;
+    /* STOPPED → handle_parsing re-arms RX on the next idle tick. */
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
 }
 
 static void app_driver_ir_worker_handle_parsing(bool &parsing_was_enabled)
@@ -1712,6 +1759,17 @@ static void app_driver_ir_worker_handle_parsing(bool &parsing_was_enabled)
         return;
     }
 
+    /* Post-learn / post-restore settle: stay unarmed. */
+    if (s_ir_parse_earliest_tick != 0 &&
+        xTaskGetTickCount() < s_ir_parse_earliest_tick) {
+        if (s_ac) {
+            s_ac->stop_capture();
+        }
+        s_ir_worker_state = ir_worker_state_t::STOPPED;
+        return;
+    }
+    s_ir_parse_earliest_tick = 0;
+
     if (!parsing_was_enabled) {
         parsing_was_enabled = true;
         ESP_LOGI(TAG_IR, "IR parsing enabled: paired and subscribed");
@@ -1721,17 +1779,12 @@ static void app_driver_ir_worker_handle_parsing(bool &parsing_was_enabled)
         return;
     }
 
-    if (s_ir_parse_earliest_tick != 0 &&
-        xTaskGetTickCount() < s_ir_parse_earliest_tick) {
-        return;
-    }
-    s_ir_parse_earliest_tick = 0;
-
     if (s_ir_worker_state == ir_worker_state_t::STOPPED ||
         s_ir_worker_state == ir_worker_state_t::IDLE) {
         s_ac->start_capture();
         if (!s_ac->capture_armed()) {
             ESP_LOGW(TAG_IR, "IR parsing RX arm failed; will retry");
+            s_ir_worker_state = ir_worker_state_t::STOPPED;
             return;
         }
         s_ir_worker_state = ir_worker_state_t::PARSING;
