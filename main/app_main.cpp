@@ -251,8 +251,10 @@ static void app_set_default_node_label(node_t *node)
     if (attribute::get_val(node_label, &current) == ESP_OK &&
         current.val.a.s > 0 && current.val.a.b != nullptr) {
         char existing[64] = {};
-        const size_t copy_len =
-            std::min(sizeof(existing) - 1, static_cast<size_t>(current.val.a.s));
+        size_t copy_len = static_cast<size_t>(current.val.a.s);
+        if (copy_len >= sizeof(existing)) {
+            copy_len = sizeof(existing) - 1;
+        }
         std::memcpy(existing, current.val.a.b, copy_len);
         existing[copy_len] = '\0';
 
