@@ -14,5 +14,5 @@
  * Product / device model name (Basic Information ProductName).
  * Also used as the default commissionable / NodeLabel-facing name.
  */
-#define CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME "AC Remote"
-#define CHIP_DEVICE_CONFIG_DEVICE_NAME "AC Remote"
+#define CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME "Air Conditioner"
+#define CHIP_DEVICE_CONFIG_DEVICE_NAME "Air Conditioner"
