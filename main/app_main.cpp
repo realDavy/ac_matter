@@ -88,6 +88,8 @@ static void sht30_humidity_notification(uint16_t endpoint_id, float humidity_pct
                                         void *user_data);
 static void app_start_display_ui(void);
 static void app_start_pairing_display(void);
+static void app_start_pairing_display_after_fail(void);
+static void app_clear_pairing_fail_tip(chip::System::Layer *layer, void *appState);
 static void app_suspend_display_for_pase(void);
 static void app_start_sht30(void);
 static void app_start_ui_peripherals(void);
@@ -574,7 +576,17 @@ static void app_start_pairing_display_timer(chip::System::Layer * /*layer*/,
 {
     app_schedule_work([](intptr_t /*arg*/) {
         if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
-            app_start_pairing_display();
+            app_start_pairing_display_after_fail();
+        }
+    });
+}
+
+static void app_clear_pairing_fail_tip(chip::System::Layer * /*layer*/,
+                                       void * /*appState*/)
+{
+    app_schedule_work([](intptr_t /*arg*/) {
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+            ui_clear_commissioning_failed();
         }
     });
 }
@@ -662,7 +674,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
                         chip::System::Clock::Milliseconds32(400),
                         app_start_pairing_display_timer, nullptr);
                 } else {
-                    app_start_pairing_display();
+                    app_start_pairing_display_after_fail();
                 }
             } else {
                 /* BLE heap is back; safe to bring up the normal UI. */
@@ -692,7 +704,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
                          "Fail-safe expired; defer pairing UI until CHIPoBLE closes");
                 return;
             }
-            app_start_pairing_display();
+            app_start_pairing_display_after_fail();
         });
         break;
 
@@ -721,7 +733,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
                              "until CHIPoBLE closes (heap)");
                     return;
                 }
-                app_start_pairing_display();
+                app_start_pairing_display_after_fail();
             } else {
                 app_try_start_pending_post_commission_ui();
             }
@@ -972,7 +984,35 @@ static void app_start_pairing_display(void)
 
     ESP_LOGI(TAG, "Starting pairing display (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
+    (void)chip::DeviceLayer::SystemLayer().CancelTimer(app_clear_pairing_fail_tip,
+                                                       nullptr);
+    ui_clear_commissioning_failed();
     app_start_display_ui();
+}
+
+/*
+ * After a cancelled / failed attempt: show "配网失败 / 请检查是否为2.4G WiFi"
+ * briefly, then return to the pairing QR.
+ */
+static void app_start_pairing_display_after_fail(void)
+{
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting pairing-fail tip then QR (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
+    app_start_display_ui();
+    if (ui_show_commissioning_failed() != ESP_OK) {
+        /* UI not ready — fall back to the normal QR page. */
+        return;
+    }
+
+    (void)chip::DeviceLayer::SystemLayer().CancelTimer(app_clear_pairing_fail_tip,
+                                                       nullptr);
+    (void)chip::DeviceLayer::SystemLayer().StartTimer(
+        chip::System::Clock::Milliseconds32(3000), app_clear_pairing_fail_tip,
+        nullptr);
 }
 
 static void app_suspend_display_for_pase(void)
