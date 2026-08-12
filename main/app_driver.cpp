@@ -523,9 +523,11 @@ static std::atomic_bool s_factory_reset_in_progress{false};
 static std::atomic_bool s_ir_pairing{false};
 static TickType_t s_ir_pairing_started_tick = 0;
 static TickType_t s_ir_pairing_last_wait_log_tick = 0;
+static TickType_t s_ir_pairing_last_rearm_tick = 0;
 /* Give the user time to aim the remote; UI leaves "..." after this. */
 static constexpr uint32_t k_ir_learn_timeout_ms = 60000;
 static constexpr uint32_t k_ir_learn_wait_log_ms = 5000;
+static constexpr uint32_t k_ir_learn_rearm_ms = 500;
 static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
 static std::atomic_bool s_ir_last_clear_success{false};
@@ -1418,6 +1420,7 @@ static void app_driver_ir_worker_start_pairing()
     s_ir_pairing.store(true);
     s_ir_pairing_started_tick = xTaskGetTickCount();
     s_ir_pairing_last_wait_log_tick = s_ir_pairing_started_tick;
+    s_ir_pairing_last_rearm_tick = s_ir_pairing_started_tick;
     s_ac->start_capture();
     s_ir_worker_state = ir_worker_state_t::PAIRING;
 
@@ -1588,8 +1591,12 @@ static void app_driver_ir_worker_handle_pairing()
         return;
     }
 
-    /* Re-arm only when nothing is pending — never after a ready frame. */
-    if (!s_ac->capture_armed()) {
+    /* Re-arm only when nothing is pending — never after a ready frame.
+     * Throttle retries so a persistent rmt_receive failure cannot spam logs. */
+    if (!s_ac->capture_armed() &&
+        (now - s_ir_pairing_last_rearm_tick) * portTICK_PERIOD_MS >=
+            k_ir_learn_rearm_ms) {
+        s_ir_pairing_last_rearm_tick = now;
         s_ac->start_capture();
     }
 }

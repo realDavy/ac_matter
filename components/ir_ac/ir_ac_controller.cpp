@@ -242,8 +242,7 @@ void IrAcController::start_capture()
     if (!init_ok_) {
         return;
     }
-    rmt_ir_start_receive();
-    capture_armed_ = true;
+    capture_armed_ = (rmt_ir_start_receive() == ESP_OK);
 }
 
 void IrAcController::stop_capture()
