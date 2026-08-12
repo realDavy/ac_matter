@@ -1207,7 +1207,7 @@ extern "C" void app_main()
 
     /*
      * Kill backlight ASAP so a floating BL pin cannot show GC9A01 snow while
-     * Matter/NVS bring-up runs (panel GRAM is random until the first UI flush).
+     * Matter/NVS bring-up runs (panel GRAM is random until display_init clears it).
      */
     display_backlight_early_off();
 

@@ -408,7 +408,7 @@ deps/IRremoteESP8266/   git submodule（UNIT_TEST + SWIGLIB）
 | 屏上文字花屏/色带 | 确认固件启用了 `CONFIG_LV_COLOR_16_SWAP`（GC9A01 SPI 必需）；工程已用 CMake 强制 `-DLV_COLOR_16_SWAP=1`。若仍色带：`rm sdkconfig && idf.py fullclean && idf.py build flash` |
 | 屏上文字缺笔画/发虚 | 同上（色带破坏抗锯齿）；并确认已拉取含 bpp8 文泉驿字库的最新 `main` |
 | 屏上文字左右颠倒（EN 变成 NE） | 已由 `BOARD_LCD_MIRROR_X` 校正本模组扫描方向；确认已拉取最新 `main` 并重刷 |
-| 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；若日志有 LVGL buffer OOM，固件会降级单缓冲重试 |
+| 屏不亮 / 花屏 | 查 SPI 脚 12/13/14/21/47、背光 48、供电与 `board_pins.h`；串口应有 `backlight on` / `UI ready`。若只有黑屏无 UI，查 `UI init failed` / LVGL OOM |
 | 触摸无反应 | 查 I2C 8/9、INT/RST 15/16、地址 `0x46`；与 SHT30 共总线时确认上拉；日志看 `it7259` probe。固件需按 ITE 手册解析 Query bit7/坐标打包 |
 | 红外学习无反应 | 查 GPIO4 接收头接线与朝向；确认已点屏上「开始学习」 |
 | 有学习但空调不动 | 查 GPIO5 驱动电路与发射管方向/电流；试 Alt 遍历换协议 |
