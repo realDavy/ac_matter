@@ -36,6 +36,7 @@
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
 #include <app/util/attribute-table.h>
+#include <app-common/zap-generated/attribute-type.h>
 #include <esp_matter_providers.h>
 #include <lib/support/Span.h>
 #include <protocols/interaction_model/StatusCode.h>
