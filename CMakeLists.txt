@@ -7,7 +7,12 @@ if(NOT DEFINED ENV{ESP_MATTER_PATH})
 endif(NOT DEFINED ENV{ESP_MATTER_PATH})
 
 if(NOT DEFINED ENV{ESP_MATTER_DEVICE_PATH})
-    if("${IDF_TARGET}" STREQUAL "esp32" OR "${IDF_TARGET}" STREQUAL "")
+    # Before project.cmake, IDF_TARGET is often still empty even when sdkconfig
+    # already says esp32s3. This product is S3-only — default to S3 HAL so
+    # `idf.py fullclean && idf.py build` does not pick esp32_devkit_c.
+    if("${IDF_TARGET}" STREQUAL "esp32s3" OR "${IDF_TARGET}" STREQUAL "")
+        set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32s3_devkit_c)
+    elseif("${IDF_TARGET}" STREQUAL "esp32")
         set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32_devkit_c)
     elseif("${IDF_TARGET}" STREQUAL "esp32c3")
         set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32c3_devkit_m)
@@ -15,8 +20,6 @@ if(NOT DEFINED ENV{ESP_MATTER_DEVICE_PATH})
         set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32c2_devkit_m)
     elseif("${IDF_TARGET}" STREQUAL "esp32h2")
         set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32h2_devkit_c)
-    elseif("${IDF_TARGET}" STREQUAL "esp32s3")
-        set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32s3_devkit_c)
     elseif("${IDF_TARGET}" STREQUAL "esp32c6")
         set(ENV{ESP_MATTER_DEVICE_PATH} $ENV{ESP_MATTER_PATH}/device_hal/device/esp32c6_devkit_c)
     else()
