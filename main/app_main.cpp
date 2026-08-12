@@ -35,7 +35,9 @@
 #include <platform/ESP32/ESP32Config.h>
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
+#include <app-common/zap-generated/attributes/Accessors.h>
 #include <esp_matter_providers.h>
+#include <lib/support/Span.h>
 
 #include "unique_commissionable_data_provider.h"
 #include "sht30.h"
@@ -228,8 +230,44 @@ static void app_expose_serial_number(node_t *node, char *serial)
 }
 
 /**
- * Set default NodeLabel so controllers show "Air Conditioner" before the user
- * renames it. Refresh known old stock names; leave custom user labels alone.
+ * Persist ProductName / VendorName into chip-factory so DeviceInstanceInfo
+ * (and Apple Home) do not fall back to the generic "Matter Accessory" label
+ * when CHIP_DEVICE_CONFIG_* did not make it into the linked CHIP library.
+ */
+static void app_persist_factory_product_identity(void)
+{
+    using chip::DeviceLayer::Internal::ESP32Config;
+
+    const esp_err_t part_err =
+        nvs_flash_init_partition(CHIP_DEVICE_CONFIG_CHIP_FACTORY_NAMESPACE_PARTITION);
+    if (part_err != ESP_OK && part_err != ESP_ERR_NVS_NO_FREE_PAGES &&
+        part_err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "Factory NVS init for product identity (%s): %s",
+                 CHIP_DEVICE_CONFIG_CHIP_FACTORY_NAMESPACE_PARTITION,
+                 esp_err_to_name(part_err));
+    }
+
+    CHIP_ERROR err =
+        ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_ProductName, k_device_name);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG, "Factory ProductName write failed: %" CHIP_ERROR_FORMAT, err.Format());
+    } else {
+        ESP_LOGI(TAG, "Factory ProductName set to \"%s\"", k_device_name);
+    }
+
+    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_VendorName, "aidaegis");
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG, "Factory VendorName write failed: %" CHIP_ERROR_FORMAT, err.Format());
+    }
+}
+
+/**
+ * Default NodeLabel / ProductName for controllers.
+ *
+ * Newer esp-matter marks BasicInformation::NodeLabel as MANAGED_INTERNALLY, so
+ * attribute::set_val() fails with "not managed by esp matter data model" (see
+ * serial log). Prefill node_config at create time, and force the value through
+ * the Matter Accessors API after the server starts.
  */
 static void app_set_default_node_label(node_t *node)
 {
@@ -237,22 +275,28 @@ static void app_set_default_node_label(node_t *node)
         return;
     }
 
+    /* Best-effort for older esp-matter builds where NodeLabel is writable. */
     endpoint_t *root = endpoint::get(node, 0);
     if (root == nullptr) {
-        ESP_LOGE(TAG, "Root endpoint missing; cannot set NodeLabel");
         return;
     }
-
     cluster_t *basic = cluster::get(root, BasicInformation::Id);
     if (basic == nullptr) {
-        ESP_LOGE(TAG, "Basic Information cluster missing; cannot set NodeLabel");
         return;
     }
 
     attribute_t *node_label =
         attribute::get(basic, BasicInformation::Attributes::NodeLabel::Id);
     if (node_label == nullptr) {
-        ESP_LOGE(TAG, "NodeLabel attribute missing");
+        char name[32];
+        std::strncpy(name, k_device_name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        if (cluster::basic_information::attribute::create_node_label(
+                basic, name, static_cast<uint16_t>(std::strlen(name))) == nullptr) {
+            ESP_LOGW(TAG, "create_node_label failed; will retry after Matter start");
+        } else {
+            ESP_LOGI(TAG, "NodeLabel attribute created: \"%s\"", name);
+        }
         return;
     }
 
@@ -287,11 +331,46 @@ static void app_set_default_node_label(node_t *node)
         esp_matter_char_str(name, static_cast<uint16_t>(std::strlen(name)));
     esp_err_t set_err = attribute::set_val(node_label, &val);
     if (set_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set NodeLabel, err=%d", set_err);
+        /* Expected on newer esp-matter (MANAGED_INTERNALLY). */
+        ESP_LOGW(TAG,
+                 "NodeLabel set_val not supported (%s); applying after Matter start",
+                 esp_err_to_name(set_err));
         return;
     }
 
     ESP_LOGI(TAG, "NodeLabel set to \"%s\"", name);
+}
+
+/** Apply NodeLabel via CHIP Accessors (works when esp-matter set_val cannot). */
+static void app_apply_node_label_via_accessors(intptr_t /*arg*/)
+{
+    using chip::app::Clusters::BasicInformation;
+
+    char existing[64] = {};
+    chip::MutableCharSpan existing_span(existing, sizeof(existing) - 1);
+    const CHIP_ERROR get_err =
+        BasicInformation::Attributes::NodeLabel::Get(0, existing_span);
+    if (get_err == CHIP_NO_ERROR && existing_span.size() > 0) {
+        existing[existing_span.size()] = '\0';
+        const bool stock_name =
+            std::strcmp(existing, k_device_name) == 0 ||
+            std::strcmp(existing, "AC Remote") == 0 ||
+            std::strcmp(existing, "Air AC Remote") == 0 ||
+            std::strcmp(existing, "Matter Accessory") == 0;
+        if (!stock_name) {
+            ESP_LOGI(TAG, "NodeLabel (Accessors) \"%s\"; leaving unchanged", existing);
+            return;
+        }
+    }
+
+    const CHIP_ERROR set_err = BasicInformation::Attributes::NodeLabel::Set(
+        0, chip::CharSpan(k_device_name, std::strlen(k_device_name)));
+    if (set_err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "NodeLabel Accessors::Set failed: %" CHIP_ERROR_FORMAT,
+                 set_err.Format());
+        return;
+    }
+    ESP_LOGI(TAG, "NodeLabel (Accessors) set to \"%s\"", k_device_name);
 }
 
 /*
@@ -1223,6 +1302,8 @@ extern "C" void app_main()
     if (!app_ensure_serial_number(s_serial_number, sizeof(s_serial_number))) {
         ESP_LOGW(TAG, "SerialNumber unavailable; Home will show it empty");
     }
+    /* ProductName in factory NVS — avoids Apple Home "Matter Accessory". */
+    app_persist_factory_product_identity();
 
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
@@ -1231,6 +1312,11 @@ extern "C" void app_main()
 
     /* Create a Matter node and add the mandatory Root Node device type on endpoint 0 */
     node::config_t node_config;
+    /* Seed NodeLabel at create time (create_node_label initial value). */
+    std::strncpy(node_config.root_node.basic_information.node_label, k_device_name,
+                 sizeof(node_config.root_node.basic_information.node_label) - 1);
+    node_config.root_node.basic_information.node_label
+        [sizeof(node_config.root_node.basic_information.node_label) - 1] = '\0';
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
@@ -1436,6 +1522,12 @@ extern "C" void app_main()
     /* Matter start */
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+
+    /*
+     * Newer esp-matter marks NodeLabel MANAGED_INTERNALLY so early set_val
+     * fails. Apply via CHIP Accessors on the Matter stack after start.
+     */
+    app_schedule_work(app_apply_node_label_via_accessors);
 
     /*
      * Register after Matter start: the default esp_event loop is created by
