@@ -15,6 +15,15 @@ esp_err_t ui_init(void);
  */
 esp_err_t ui_show_commissioning_busy(void);
 
+/**
+ * After a cancelled / failed commission attempt, show a short tip asking the
+ * user to verify 2.4GHz Wi-Fi. Cleared by ui_clear_commissioning_failed().
+ */
+esp_err_t ui_show_commissioning_failed(void);
+
+/** Leave the fail tip and return to the normal pairing QR screen. */
+void ui_clear_commissioning_failed(void);
+
 /** Stop the UI task so LVGL can be suspended for Matter PASE. */
 void ui_deinit(void);
 

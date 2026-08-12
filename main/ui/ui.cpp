@@ -28,6 +28,7 @@ static const char *TAG = "ui";
 enum class ui_screen_t : uint8_t {
     PAIRING = 0,
     PAIRING_BUSY,
+    PAIRING_FAIL,
     LEARN,
     AC,
     LIGHT,
@@ -38,6 +39,7 @@ static std::atomic<bool> s_english{false};
 static std::atomic<bool> s_ready{false};
 static std::atomic<bool> s_stop_task{false};
 static std::atomic<bool> s_pairing_busy{false};
+static std::atomic<bool> s_pairing_fail{false};
 static bool s_ui_backlight_hold = false;
 static TaskHandle_t s_task = nullptr;
 static ui_screen_t s_screen = ui_screen_t::PAIRING;
@@ -381,8 +383,43 @@ static void show_pairing_busy(void)
     lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
     lv_obj_set_width(s_subtitle, 180);
+    lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_subtitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_subtitle, LV_ALIGN_CENTER, 0, 18);
     lv_label_set_text(s_subtitle, s->pairing_busy_hint);
+    if (s_qr_img) {
+#if LVGL_VERSION_MAJOR >= 9
+        lv_image_set_src(s_qr_img, nullptr);
+#else
+        lv_img_set_src(s_qr_img, nullptr);
+#endif
+    }
+}
+
+static void show_pairing_fail(void)
+{
+    const bool english = s_english.load();
+    const ui_strings_t *s = ui_strings(english);
+    hide_all_controls();
+    if (s_lang_btn) {
+        lv_obj_add_flag(s_lang_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_set_style_text_font(s_title, &ui_font_cn_22, 0);
+    lv_obj_set_style_text_color(s_title, lv_color_hex(kColTitle), 0);
+    lv_obj_set_width(s_title, 180);
+    lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, -28);
+    lv_label_set_text(s_title, s->pairing_fail_title);
+
+    lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_subtitle, &ui_font_cn_18, 0);
+    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColBody), 0);
+    lv_obj_set_width(s_subtitle, 190);
+    lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_subtitle, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_subtitle, LV_ALIGN_CENTER, 0, 12);
+    lv_label_set_text(s_subtitle, s->pairing_fail_hint);
+
     if (s_qr_img) {
 #if LVGL_VERSION_MAJOR >= 9
         lv_image_set_src(s_qr_img, nullptr);
@@ -539,6 +576,7 @@ static void sync_backlight_hold_for_screen(ui_screen_t screen)
 {
     const bool want_hold = (screen == ui_screen_t::PAIRING ||
                             screen == ui_screen_t::PAIRING_BUSY ||
+                            screen == ui_screen_t::PAIRING_FAIL ||
                             screen == ui_screen_t::LEARN);
     if (want_hold == s_ui_backlight_hold) {
         return;
@@ -552,6 +590,7 @@ static void apply_backlight_hold_for_screen(ui_screen_t screen)
 {
     const bool want_hold = (screen == ui_screen_t::PAIRING ||
                             screen == ui_screen_t::PAIRING_BUSY ||
+                            screen == ui_screen_t::PAIRING_FAIL ||
                             screen == ui_screen_t::LEARN);
     display_set_idle_hold(want_hold);
     s_ui_backlight_hold = want_hold;
@@ -566,6 +605,9 @@ static void apply_screen(ui_screen_t screen)
         break;
     case ui_screen_t::PAIRING_BUSY:
         show_pairing_busy();
+        break;
+    case ui_screen_t::PAIRING_FAIL:
+        show_pairing_fail();
         break;
     case ui_screen_t::LEARN:
         show_learn();
@@ -855,6 +897,9 @@ static ui_screen_t decide_screen(void)
     if (s_pairing_busy.load()) {
         return ui_screen_t::PAIRING_BUSY;
     }
+    if (s_pairing_fail.load()) {
+        return ui_screen_t::PAIRING_FAIL;
+    }
 
     /*
      * Pairing QR is only for the uncommissioned device. Once a fabric exists,
@@ -969,6 +1014,7 @@ esp_err_t ui_show_commissioning_busy(void)
      * Freeze the language currently selected on the pairing page (via EN/中文)
      * so the busy frame matches what the user last chose.
      */
+    s_pairing_fail.store(false);
     s_pairing_busy.store(true);
     const bool english = s_english.load();
     if (!lvgl_port_lock(200)) {
@@ -993,6 +1039,53 @@ esp_err_t ui_show_commissioning_busy(void)
     return ESP_OK;
 }
 
+esp_err_t ui_show_commissioning_failed(void)
+{
+    if (!s_ready.load() || !display_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_pairing_busy.store(false);
+    s_pairing_fail.store(true);
+    const bool english = s_english.load();
+    if (!lvgl_port_lock(200)) {
+        s_pairing_fail.store(false);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    apply_screen(ui_screen_t::PAIRING_FAIL);
+    if (s_root) {
+        lv_obj_invalidate(s_root);
+    }
+    lv_refr_now(display_get_disp());
+    lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "Showing commissioning-fail tip (lang=%s, hint=%s)",
+             english ? "en" : "zh",
+             ui_strings(english)->pairing_fail_hint);
+    return ESP_OK;
+}
+
+void ui_clear_commissioning_failed(void)
+{
+    if (!s_pairing_fail.exchange(false)) {
+        return;
+    }
+    if (!s_ready.load() || !display_is_ready()) {
+        return;
+    }
+    if (!lvgl_port_lock(200)) {
+        return;
+    }
+    apply_screen(ui_screen_t::PAIRING);
+    if (s_root) {
+        lv_obj_invalidate(s_root);
+    }
+    lv_refr_now(display_get_disp());
+    lvgl_port_unlock();
+    ESP_LOGI(TAG, "Cleared commissioning-fail tip; back to pairing QR");
+}
+
 void ui_deinit(void)
 {
     if (!s_ready.load() && s_task == nullptr) {
@@ -1002,6 +1095,7 @@ void ui_deinit(void)
     ESP_LOGI(TAG, "Stopping UI task");
     s_stop_task.store(true);
     s_pairing_busy.store(false);
+    s_pairing_fail.store(false);
     s_ready.store(false);
     /*
      * Keep backlight held across PASE suspend (busy frame stays visible).

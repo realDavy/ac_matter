@@ -8,6 +8,8 @@ typedef struct {
     const char *pairing_wifi_hint;
     const char *pairing_busy_title;
     const char *pairing_busy_hint;
+    const char *pairing_fail_title;
+    const char *pairing_fail_hint;
     const char *manual_code;
     const char *learn_title;
     const char *learn_hint;
@@ -45,7 +47,9 @@ static inline const ui_strings_t *ui_strings(bool english)
         .pairing_hint = "请扫码或输入配对码",
         .pairing_wifi_hint = "请用2.4G WiFi",
         .pairing_busy_title = "配对中...",
-        .pairing_busy_hint = "请用2.4G WiFi完成添加",
+        .pairing_busy_hint = "请在手机上完成添加",
+        .pairing_fail_title = "配网失败",
+        .pairing_fail_hint = "请检查是否为2.4G WiFi",
         .manual_code = "配对码",
         .learn_title = "红外学习",
         .learn_hint = "对准遥控按任意键",
@@ -81,7 +85,9 @@ static inline const ui_strings_t *ui_strings(bool english)
         .pairing_hint = "Scan QR or enter code",
         .pairing_wifi_hint = "Use 2.4GHz Wi-Fi",
         .pairing_busy_title = "Pairing...",
-        .pairing_busy_hint = "Use 2.4GHz Wi-Fi on phone",
+        .pairing_busy_hint = "Finish setup on your phone",
+        .pairing_fail_title = "Setup Failed",
+        .pairing_fail_hint = "Check that Wi-Fi is 2.4GHz",
         .manual_code = "Setup Code",
         .learn_title = "IR Learn",
         .learn_hint = "Aim remote, press any key",
