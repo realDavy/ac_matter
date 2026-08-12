@@ -46,7 +46,10 @@ class IrAcController {
     void start_capture();
     void stop_capture();
     bool signal_captured();
+    /* True while RMT RX is armed waiting for a frame. */
+    bool capture_armed() const;
     bool is_busy() const;
+    gpio_num_t rx_gpio() const { return rx_gpio_; }
 
     /* Decode one captured frame into a supported AC protocol and pair. */
     bool pair_from_capture();

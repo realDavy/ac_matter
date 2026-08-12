@@ -521,6 +521,11 @@ static QueueHandle_t s_ir_command_queue = nullptr;
 static std::atomic_bool s_factory_reset_armed{false};
 static std::atomic_bool s_factory_reset_in_progress{false};
 static std::atomic_bool s_ir_pairing{false};
+static TickType_t s_ir_pairing_started_tick = 0;
+static TickType_t s_ir_pairing_last_wait_log_tick = 0;
+/* Give the user time to aim the remote; UI leaves "..." after this. */
+static constexpr uint32_t k_ir_learn_timeout_ms = 60000;
+static constexpr uint32_t k_ir_learn_wait_log_ms = 5000;
 static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
 static std::atomic_bool s_ir_last_clear_success{false};
@@ -1411,11 +1416,25 @@ static void app_driver_ir_worker_start_pairing()
     s_ir_paired.store(false);
     s_ir_match_index = 0;
     s_ir_pairing.store(true);
+    s_ir_pairing_started_tick = xTaskGetTickCount();
+    s_ir_pairing_last_wait_log_tick = s_ir_pairing_started_tick;
     s_ac->start_capture();
     s_ir_worker_state = ir_worker_state_t::PAIRING;
 
+    const int rx_level = gpio_get_level(IR_RX_PIN);
     ESP_LOGI(TAG_IR,
              "Pairing started. Point the AC remote at the IR receiver and press any button.");
+    ESP_LOGI(TAG_IR,
+             "IR RX GPIO%d idle level=%d (demodulator should idle HIGH=1). "
+             "Timeout %u s; tap Learn again to cancel.",
+             static_cast<int>(IR_RX_PIN), rx_level,
+             static_cast<unsigned>(k_ir_learn_timeout_ms / 1000));
+    if (rx_level == 0) {
+        ESP_LOGW(TAG_IR,
+                 "IR RX idle is LOW — check receiver VCC/GND and that the "
+                 "yellow OUT wire is on GPIO%d (not LED/TX)",
+                 static_cast<int>(IR_RX_PIN));
+    }
     app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
 }
 
@@ -1505,46 +1524,74 @@ static void app_driver_ir_worker_handle_pairing()
         return;
     }
 
-    if (!s_ac->signal_captured()) {
+    const TickType_t now = xTaskGetTickCount();
+    const uint32_t elapsed_ms =
+        (now - s_ir_pairing_started_tick) * portTICK_PERIOD_MS;
+    if (elapsed_ms >= k_ir_learn_timeout_ms) {
+        ESP_LOGW(TAG_IR,
+                 "IR learn timed out after %u s with no usable frame "
+                 "(RX GPIO%d level=%d)",
+                 static_cast<unsigned>(elapsed_ms / 1000),
+                 static_cast<int>(IR_RX_PIN), gpio_get_level(IR_RX_PIN));
+        app_driver_ir_worker_cancel_pairing();
         return;
     }
 
-    ESP_LOGI(TAG_IR, "IR signal captured for pairing; decoding protocol");
-    display_activity_notify();
-
-    const bool ok = s_ac->pair_from_capture();
-    s_ir_pairing.store(false);
-    app_driver_ir_alt_reset_tracking();
-
-    if (ok) {
-        Temp = 25;
-        Mode = 1;
-        Fan = 0;
-        PowerOn = true;
-        s_ir_match_index = 0;
-        s_ir_paired.store(true);
-        s_ac->init_ok = true;
-        s_ir_worker_state = ir_worker_state_t::IDLE;
-
-        ESP_LOGI(TAG_IR, "IR AC pairing succeeded: protocol=%s",
-                 s_ac->protocol_name());
-
-        if (!app_driver_ir_save_pairing()) {
-            ESP_LOGW(TAG_IR, "Pairing succeeded but NVS save failed");
-        }
-    } else {
-        s_ac->clear_pairing();
-        s_ac->init_ok = s_ac->ready();
-        s_ir_paired.store(false);
-        s_ir_worker_state = ir_worker_state_t::STOPPED;
-
-        ESP_LOGW(TAG_IR,
-                 "IR AC pairing failed after IR capture "
-                 "(unsupported or unrecognized AC protocol)");
-        app_driver_ir_erase_saved_pairing();
+    if ((now - s_ir_pairing_last_wait_log_tick) * portTICK_PERIOD_MS >=
+        k_ir_learn_wait_log_ms) {
+        s_ir_pairing_last_wait_log_tick = now;
+        ESP_LOGI(TAG_IR,
+                 "Still waiting for IR on GPIO%d (level=%d, armed=%d, %u s left)",
+                 static_cast<int>(IR_RX_PIN), gpio_get_level(IR_RX_PIN),
+                 static_cast<int>(s_ac->capture_armed()),
+                 static_cast<unsigned>(
+                     (k_ir_learn_timeout_ms - elapsed_ms + 999) / 1000));
     }
 
-    app_driver_update_led_states();
+    if (s_ac->signal_captured()) {
+        ESP_LOGI(TAG_IR, "IR signal captured for pairing; decoding protocol");
+        display_activity_notify();
+
+        const bool ok = s_ac->pair_from_capture();
+        s_ir_pairing.store(false);
+        app_driver_ir_alt_reset_tracking();
+
+        if (ok) {
+            Temp = 25;
+            Mode = 1;
+            Fan = 0;
+            PowerOn = true;
+            s_ir_match_index = 0;
+            s_ir_paired.store(true);
+            s_ac->init_ok = true;
+            s_ir_worker_state = ir_worker_state_t::IDLE;
+
+            ESP_LOGI(TAG_IR, "IR AC pairing succeeded: protocol=%s",
+                     s_ac->protocol_name());
+
+            if (!app_driver_ir_save_pairing()) {
+                ESP_LOGW(TAG_IR, "Pairing succeeded but NVS save failed");
+            }
+        } else {
+            s_ac->clear_pairing();
+            s_ac->init_ok = s_ac->ready();
+            s_ir_paired.store(false);
+            s_ir_worker_state = ir_worker_state_t::STOPPED;
+
+            ESP_LOGW(TAG_IR,
+                     "IR AC pairing failed after IR capture "
+                     "(unsupported or unrecognized AC protocol)");
+            app_driver_ir_erase_saved_pairing();
+        }
+
+        app_driver_update_led_states();
+        return;
+    }
+
+    /* Re-arm only when nothing is pending — never after a ready frame. */
+    if (!s_ac->capture_armed()) {
+        s_ac->start_capture();
+    }
 }
 
 static void app_driver_ir_worker_parse_signal()
@@ -2065,9 +2112,7 @@ void app_driver_ir_start_learn(void)
     if (s_factory_reset_in_progress.load()) {
         return;
     }
-    if (s_ir_pairing.load()) {
-        return;
-    }
+    /* Toggle: first tap starts learn, second tap cancels and restores the button. */
     app_driver_ir_request_pairing_toggle();
 }
 

@@ -259,6 +259,11 @@ bool IrAcController::signal_captured()
     return rmt_ir_frame_ready();
 }
 
+bool IrAcController::capture_armed() const
+{
+    return capture_armed_ && rmt_ir_rx_armed();
+}
+
 bool IrAcController::is_busy() const
 {
     return rmt_ir_is_busy();

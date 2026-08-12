@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
 #include "esp_check.h"
@@ -101,6 +102,13 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     rx_cfg.mem_block_symbols = 128;
     ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&rx_cfg, &s_rx), TAG, "rx channel");
 
+    /*
+     * Demodulating receivers (VS1838 / HS0038 / RM Mini IR) idle HIGH and
+     * pull LOW during marks. Enable a weak pull-up so a disconnected or
+     * open-drain OUT does not float and block RMT edge detection.
+     */
+    (void)gpio_set_pull_mode(rx_gpio, GPIO_PULLUP_ONLY);
+
     rmt_rx_event_callbacks_t cbs = {
         .on_recv_done = rx_done_callback,
     };
@@ -110,8 +118,9 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
 
     ESP_RETURN_ON_ERROR(rmt_enable(s_rx), TAG, "enable rx");
 
-    ESP_LOGI(TAG, "RMT IR ready: TX=GPIO%d RX=GPIO%d", static_cast<int>(tx_gpio),
-             static_cast<int>(rx_gpio));
+    ESP_LOGI(TAG, "RMT IR ready: TX=GPIO%d RX=GPIO%d (idle level=%d, expect 1)",
+             static_cast<int>(tx_gpio), static_cast<int>(rx_gpio),
+             gpio_get_level(rx_gpio));
     return ESP_OK;
 }
 
@@ -205,20 +214,33 @@ esp_err_t rmt_ir_start_receive()
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Already waiting for a frame — do not call rmt_receive again. */
+    if (s_rx_armed) {
+        return ESP_OK;
+    }
+
     s_frame_ready = false;
     s_last_frame_us.clear();
     xQueueReset(s_rx_queue);
 
     rmt_receive_config_t cfg = {};
     cfg.signal_range_min_ns = kRxMinNs;
+    /* End frame after ~120 ms idle (typical AC inter-burst gap). */
     cfg.signal_range_max_ns = 120000000;
 
     esp_err_t err =
         rmt_receive(s_rx, s_rx_symbols, sizeof(s_rx_symbols), &cfg);
     if (err == ESP_OK) {
         s_rx_armed = true;
+    } else {
+        ESP_LOGW(TAG, "rmt_receive failed: %s", esp_err_to_name(err));
     }
     return err;
+}
+
+bool rmt_ir_rx_armed()
+{
+    return s_rx_armed;
 }
 
 void rmt_ir_stop_receive()

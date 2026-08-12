@@ -14,6 +14,7 @@ typedef struct {
     const char *learn_title;
     const char *learn_hint;
     const char *learn_btn;
+    const char *learn_cancel_btn;
     const char *ac_title;
     const char *power_on;
     const char *power_off;
@@ -57,6 +58,8 @@ static inline const ui_strings_t *ui_strings(bool english)
         .learn_title = "红外学习",
         .learn_hint = "对准遥控按任意键",
         .learn_btn = "开始学习",
+        /* ASCII only — avoid new CJK glyphs (font regen can blank LCD). */
+        .learn_cancel_btn = "Cancel",
         .ac_title = "空调",
         .power_on = "开启",
         .power_off = "关闭",
@@ -95,6 +98,7 @@ static inline const ui_strings_t *ui_strings(bool english)
         .learn_title = "IR Learn",
         .learn_hint = "Aim remote, press any key",
         .learn_btn = "Start Learn",
+        .learn_cancel_btn = "Cancel",
         .ac_title = "Air Conditioner",
         .power_on = "On",
         .power_off = "Off",

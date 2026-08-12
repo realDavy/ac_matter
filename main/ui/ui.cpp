@@ -453,7 +453,8 @@ static void show_learn(void)
     lv_obj_align(s_btn_primary, LV_ALIGN_CENTER, 0, 42);
     lv_obj_clear_flag(s_btn_primary, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_btn_primary_label,
-                      app_driver_ir_is_pairing() ? "..." : s->learn_btn);
+                      app_driver_ir_is_pairing() ? s->learn_cancel_btn
+                                                : s->learn_btn);
 }
 
 static void show_ac(void)
@@ -648,8 +649,9 @@ static void on_learn(lv_event_t *e)
 {
     (void)e;
     display_activity_notify();
+    const bool starting = !app_driver_ir_is_pairing();
     app_driver_ir_start_learn();
-    ws2812_temp_light_set_learn_active(true);
+    ws2812_temp_light_set_learn_active(starting);
     apply_screen(ui_screen_t::LEARN);
 }
 
@@ -930,13 +932,20 @@ static void ui_task(void *arg)
         if (display_is_ready() && lvgl_port_lock(50)) {
             const ui_screen_t next = decide_screen();
             if (next != last) {
-                if (next != ui_screen_t::LEARN) {
+                if (next == ui_screen_t::LEARN) {
+                    ws2812_temp_light_set_learn_active(
+                        app_driver_ir_is_pairing());
+                } else {
                     ws2812_temp_light_set_learn_active(false);
                 }
                 apply_screen(next);
                 last = next;
                 ticks = 0;
             } else if (next == ui_screen_t::AC || next == ui_screen_t::LEARN) {
+                if (next == ui_screen_t::LEARN) {
+                    ws2812_temp_light_set_learn_active(
+                        app_driver_ir_is_pairing());
+                }
                 if (++ticks >= 2) {
                     apply_screen(next);
                     ticks = 0;

@@ -20,6 +20,9 @@ esp_err_t rmt_ir_transmit(const std::vector<int> &timings_us,
 esp_err_t rmt_ir_start_receive();
 void rmt_ir_stop_receive();
 
+/* True while rmt_receive() is waiting for a complete frame. */
+bool rmt_ir_rx_armed();
+
 /* True when a complete frame was captured since the last start/consume. */
 bool rmt_ir_frame_ready();
 
