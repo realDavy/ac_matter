@@ -11,6 +11,7 @@
 #include "IRsend.h"
 #include "IRutils.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "rmt_ir.hpp"
 
 /* Provided by IRsend.cpp when SWIGLIB is defined. */
@@ -137,6 +138,10 @@ static int from_std_fan(stdAc::fanspeed_t fan)
     }
 }
 
+static constexpr uint32_t kRawTick = 2; /* IRremoteESP8266 uses 2 us ticks */
+/* Leave one spare slot: IRrecv::decode() may write rawbuf[rawlen]=0. */
+static constexpr size_t kMaxDecodeTimings = 512;
+
 static bool fill_decode_results(const std::vector<uint32_t> &timings_us,
                                 decode_results *results,
                                 std::vector<uint16_t> *raw_ticks)
@@ -145,8 +150,20 @@ static bool fill_decode_results(const std::vector<uint32_t> &timings_us,
         return false;
     }
 
-    raw_ticks->assign(timings_us.size() + 1, 0);
-    for (size_t i = 0; i < timings_us.size(); ++i) {
+    size_t count = timings_us.size();
+    if (count > kMaxDecodeTimings) {
+        ESP_LOGW(TAG, "Truncating IR timings %u -> %u",
+                 static_cast<unsigned>(count),
+                 static_cast<unsigned>(kMaxDecodeTimings));
+        count = kMaxDecodeTimings;
+    }
+
+    /*
+     * Index 0 unused (IRremote convention). rawlen == count+1 entries used.
+     * Allocate +2 so decode()'s optional rawbuf[rawlen]=0 sentinel is in-bounds.
+     */
+    raw_ticks->assign(count + 2, 0);
+    for (size_t i = 0; i < count; ++i) {
         uint32_t ticks = timings_us[i] / kRawTick;
         if (ticks > UINT16_MAX) {
             ticks = UINT16_MAX;
@@ -159,7 +176,7 @@ static bool fill_decode_results(const std::vector<uint32_t> &timings_us,
 
     memset(results, 0, sizeof(*results));
     results->rawbuf = raw_ticks->data();
-    results->rawlen = static_cast<uint16_t>(raw_ticks->size());
+    results->rawlen = static_cast<uint16_t>(count + 1);
     results->overflow = false;
     results->decode_type = decode_type_t::UNKNOWN;
     return true;
@@ -354,29 +371,40 @@ bool IrAcController::decode_frame_to_state_(AcLogicalState *logical,
         return false;
     }
 
-    decode_results results;
+    ESP_LOGI(TAG, "Decoding IR frame: %u timings, free heap=%u",
+             static_cast<unsigned>(timings_us.size()),
+             static_cast<unsigned>(esp_get_free_heap_size()));
+
+    /*
+     * Keep decode_results off the IR worker stack — AC decode walks many
+     * protocols and already needs a large stack; a stack-local results
+     * object contributed to heap corruption (TLSF assert) on 8KB stacks.
+     */
+    auto results = std::make_unique<decode_results>();
     std::vector<uint16_t> raw_ticks;
-    if (!fill_decode_results(timings_us, &results, &raw_ticks)) {
+    if (!fill_decode_results(timings_us, results.get(), &raw_ticks)) {
+        ESP_LOGW(TAG, "IR frame too short to decode (%u timings)",
+                 static_cast<unsigned>(timings_us.size()));
         return false;
     }
 
-    if (!s_irrecv || !s_irrecv->decode(&results)) {
+    if (!s_irrecv || !s_irrecv->decode(results.get())) {
         ESP_LOGW(TAG, "IR frame not decoded (%u timings)",
                  static_cast<unsigned>(timings_us.size()));
         return false;
     }
 
-    if (!IRac::isProtocolSupported(results.decode_type)) {
+    if (!IRac::isProtocolSupported(results->decode_type)) {
         ESP_LOGW(TAG, "Decoded protocol %s is not an AC protocol",
-                 typeToString(results.decode_type).c_str());
+                 typeToString(results->decode_type).c_str());
         return false;
     }
 
     stdAc::state_t state;
     IRac::initState(&state);
-    if (!IRAcUtils::decodeToState(&results, &state)) {
+    if (!IRAcUtils::decodeToState(results.get(), &state)) {
         ESP_LOGW(TAG, "decodeToState failed for %s",
-                 typeToString(results.decode_type).c_str());
+                 typeToString(results->decode_type).c_str());
         return false;
     }
 
