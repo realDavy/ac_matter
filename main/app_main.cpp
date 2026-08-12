@@ -352,7 +352,6 @@ static void app_set_default_node_label(node_t *node)
  */
 static void app_apply_node_label_after_start(intptr_t /*arg*/)
 {
-    using chip::app::Clusters::BasicInformation;
     using chip::Protocols::InteractionModel::Status;
 
     const size_t len = std::strlen(k_device_name);
@@ -369,13 +368,13 @@ static void app_apply_node_label_after_start(intptr_t /*arg*/)
 
     const Status status = emberAfWriteAttribute(
         0 /* root */,
-        BasicInformation::Id,
-        BasicInformation::Attributes::NodeLabel::Id,
+        chip::app::Clusters::BasicInformation::Id,
+        chip::app::Clusters::BasicInformation::Attributes::NodeLabel::Id,
         zcl_str,
         ZCL_CHAR_STRING_ATTRIBUTE_TYPE);
     if (status != Status::Success) {
         ESP_LOGE(TAG, "NodeLabel emberAfWriteAttribute failed: 0x%x",
-                 static_cast<unsigned>(status));
+                 static_cast<unsigned>(static_cast<std::underlying_type_t<Status>>(status)));
         return;
     }
     ESP_LOGI(TAG, "NodeLabel set to \"%s\" (emberAfWriteAttribute)", k_device_name);
