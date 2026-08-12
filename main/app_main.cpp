@@ -374,7 +374,7 @@ static void app_apply_node_label_after_start(intptr_t /*arg*/)
         ZCL_CHAR_STRING_ATTRIBUTE_TYPE);
     if (status != Status::Success) {
         ESP_LOGE(TAG, "NodeLabel emberAfWriteAttribute failed: 0x%x",
-                 static_cast<unsigned>(static_cast<std::underlying_type_t<Status>>(status)));
+                 static_cast<unsigned>(status));
         return;
     }
     ESP_LOGI(TAG, "NodeLabel set to \"%s\" (emberAfWriteAttribute)", k_device_name);
