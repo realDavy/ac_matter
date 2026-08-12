@@ -963,7 +963,11 @@ static void app_start_display_ui(void)
 
     err = ui_init();
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "UI init failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "UI init failed: %s (panel backlight stays on)",
+                 esp_err_to_name(err));
+        /* Keep panel up so a paint failure is not a forever-black screen. */
+        display_set_backlight(true);
+        display_set_idle_hold(true);
         display_suspend_lvgl();
         return;
     }
