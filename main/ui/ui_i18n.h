@@ -43,9 +43,9 @@ static inline const ui_strings_t *ui_strings(bool english)
     static const ui_strings_t zh = {
         .pairing_title = "Matter 配网",
         .pairing_hint = "请扫码或输入配对码",
-        .pairing_wifi_hint = "请用2.4G网",
+        .pairing_wifi_hint = "请用2.4G WiFi",
         .pairing_busy_title = "配对中...",
-        .pairing_busy_hint = "请用2.4G网完成添加",
+        .pairing_busy_hint = "请用2.4G WiFi完成添加",
         .manual_code = "配对码",
         .learn_title = "红外学习",
         .learn_hint = "对准遥控按任意键",
