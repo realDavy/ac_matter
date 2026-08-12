@@ -531,6 +531,8 @@ static constexpr uint32_t k_ir_learn_wait_log_ms = 5000;
 static constexpr uint32_t k_ir_learn_rearm_ms = 500;
 /* After a successful learn, wait before arming continuous RX/parse. */
 static constexpr uint32_t k_ir_parse_settle_ms = 2000;
+/* After IR TX, keep parse RX unarmed briefly so RMT TX can finish cleanly. */
+static constexpr uint32_t k_ir_tx_settle_ms = 400;
 static std::atomic_bool s_ir_paired{false};
 static std::atomic_bool s_matter_subscription_active{false};
 static TickType_t s_ir_parse_earliest_tick = 0;
@@ -592,6 +594,11 @@ static bool PowerOn = false;
 static void app_matter_schedule_whole_device_state(
     bool power_on,
     int mode);
+static void app_matter_request_whole_device_state(
+    bool power_on,
+    int mode);
+static void app_matter_request_report_all_temperatures(
+    int16_t temp_x100);
 
 /*
  * Storage for IR air-conditioner protocol pairing data.
@@ -791,8 +798,12 @@ static esp_err_t app_driver_room_air_conditioner_set_power(
      *
      * When PowerOn becomes true, Mode still contains the last active
      * non-Off mode and is therefore used to restore SystemMode.
+     *
+     * Prefer an in-thread update when already on the CHIP stack (Matter
+     * attribute callback) — ScheduleWork here used to exhaust the event
+     * queue (NO_MEMORY / "Failed to schedule work") and precede crashes.
      */
-    app_matter_schedule_whole_device_state(
+    app_matter_request_whole_device_state(
         PowerOn,
         Mode);
 
@@ -1088,6 +1099,37 @@ static void app_matter_schedule_whole_device_state(
                  "ScheduleWork for whole-device state failed: %" CHIP_ERROR_FORMAT,
                  err.Format());
     }
+}
+
+/*
+ * Matter attribute callbacks already run on the CHIP stack — update in place.
+ * UI / IR worker paths schedule work when off-stack.
+ */
+static void app_matter_request_whole_device_state(
+    bool power_on,
+    int mode)
+{
+    if (chip::DeviceLayer::PlatformMgr().IsChipStackLockedByCurrentThread()) {
+        app_matter_update_whole_device_state_now(power_on, mode);
+        return;
+    }
+    app_matter_schedule_whole_device_state(power_on, mode);
+}
+
+static void app_matter_request_report_all_temperatures(
+    int16_t temp_x100)
+{
+    if (chip::DeviceLayer::PlatformMgr().IsChipStackLockedByCurrentThread()) {
+        esp_err_t report_err =
+            app_matter_report_all_temperatures_now(temp_x100);
+        if (report_err != ESP_OK) {
+            ESP_LOGE(TAG,
+                     "In-thread temperature synchronization failed: %s",
+                     esp_err_to_name(report_err));
+        }
+        return;
+    }
+    app_matter_schedule_report_all_temperatures(temp_x100);
 }
 
 /*
@@ -1429,7 +1471,10 @@ static void app_driver_ir_worker_send_power(const ir_command_t &command)
                  static_cast<int>(command.power_on));
     }
 
-    s_ir_worker_state = ir_worker_state_t::IDLE;
+    /* Keep continuous parse RX off until RMT TX fully settles. */
+    s_ir_parse_earliest_tick =
+        xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_tx_settle_ms);
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
 }
 
 static void app_driver_ir_worker_send_state(const ir_command_t &command)
@@ -1471,7 +1516,9 @@ static void app_driver_ir_worker_send_state(const ir_command_t &command)
                  static_cast<int>(command.power_on));
     }
 
-    s_ir_worker_state = ir_worker_state_t::IDLE;
+    s_ir_parse_earliest_tick =
+        xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_tx_settle_ms);
+    s_ir_worker_state = ir_worker_state_t::STOPPED;
 }
 
 static void app_driver_ir_worker_start_pairing()
@@ -1673,10 +1720,13 @@ static void app_driver_ir_worker_handle_pairing()
                 xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_parse_settle_ms);
 
             app_driver_ir_apply_local_led();
-            /* Matter attributes only — no IR transmit. */
-            app_matter_schedule_whole_device_state(false, Mode);
-            app_matter_schedule_report_all_temperatures(
-                static_cast<int16_t>(Temp * 100));
+            /*
+             * Do not ScheduleWork Matter sync here. Learn already runs under
+             * heavy CHIP/UI load; queue posts were failing (NO_MEMORY) and
+             * preceded LoadProhibited. Local state matches Matter defaults
+             * (Off / 25°C / Cool) from set_defaults — controllers already
+             * have those values until the user changes them.
+             */
         } else {
             s_ac->clear_pairing();
             s_ac->init_ok = s_ac->ready();
@@ -2313,8 +2363,8 @@ void app_driver_ui_adjust_temp(int delta)
     PowerOn = true;
 
     const int16_t temp_x100 = static_cast<int16_t>(Temp * 100);
-    app_matter_schedule_report_all_temperatures(temp_x100);
-    app_matter_schedule_whole_device_state(PowerOn, Mode);
+    app_matter_request_report_all_temperatures(temp_x100);
+    app_matter_request_whole_device_state(PowerOn, Mode);
     app_driver_ir_queue_state(Temp, Mode, Fan, 0, PowerOn);
 }
 
@@ -2516,7 +2566,7 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
 			     * event queue via report→callback→reschedule loops.
 			     */
 			    if (rounded_temp != s_last_synced_temp_x100) {
-			        app_matter_schedule_report_all_temperatures(rounded_temp);
+			        app_matter_request_report_all_temperatures(rounded_temp);
 			    }
 
             }
@@ -2571,8 +2621,9 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle, uint16_
                      * Publish the complete logical appliance state. Off keeps
                      * Mode unchanged; a non-Off mode restores OnOff and
                      * SystemMode consistently. IR fan remains Auto.
+                     * In-thread when already on CHIP (attribute callback).
                      */
-                    app_matter_schedule_whole_device_state(
+                    app_matter_request_whole_device_state(
                         PowerOn,
                         Mode);
                 }

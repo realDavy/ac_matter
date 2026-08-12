@@ -263,10 +263,9 @@ void IrAcController::start_capture()
 
 void IrAcController::stop_capture()
 {
-    if (capture_armed_) {
-        rmt_ir_stop_receive();
-        capture_armed_ = false;
-    }
+    /* Always clear RMT RX — transmit path may have stopped it already. */
+    rmt_ir_stop_receive();
+    capture_armed_ = false;
 }
 
 bool IrAcController::signal_captured()

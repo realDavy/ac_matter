@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "soc/soc_caps.h"
 
 namespace ir_ac {
 namespace {
@@ -98,8 +99,17 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     tx_cfg.gpio_num = tx_gpio;
     tx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
     tx_cfg.resolution_hz = kResolutionHz;
-    tx_cfg.mem_block_symbols = 64;
+    /*
+     * Prefer DMA so long AC TX frames do not fight RX for shared RMT SRAM.
+     * Fall back to a compact SRAM TX block that coexists with RX=128.
+     */
+    tx_cfg.mem_block_symbols = 256;
     tx_cfg.trans_queue_depth = 4;
+#if SOC_RMT_SUPPORT_DMA
+    tx_cfg.flags.with_dma = true;
+#else
+    tx_cfg.mem_block_symbols = 64;
+#endif
 
     rmt_copy_encoder_config_t copy_cfg = {};
 
@@ -107,6 +117,7 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     rx_cfg.gpio_num = rx_gpio;
     rx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
     rx_cfg.resolution_hz = kResolutionHz;
+    /* Learn frames (BOSCH144 etc.) need a generous RX block. */
     rx_cfg.mem_block_symbols = 128;
 
     rmt_rx_event_callbacks_t cbs = {
@@ -114,6 +125,15 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     };
 
     esp_err_t err = rmt_new_tx_channel(&tx_cfg, &s_tx);
+#if SOC_RMT_SUPPORT_DMA
+    if (err != ESP_OK && tx_cfg.flags.with_dma) {
+        ESP_LOGW(TAG, "TX DMA unavailable (%s); falling back to SRAM TX",
+                 esp_err_to_name(err));
+        tx_cfg.flags.with_dma = false;
+        tx_cfg.mem_block_symbols = 64;
+        err = rmt_new_tx_channel(&tx_cfg, &s_tx);
+    }
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tx channel: %s", esp_err_to_name(err));
         rmt_ir_deinit();
@@ -215,6 +235,12 @@ esp_err_t rmt_ir_transmit(const std::vector<int> &timings_us,
         return ESP_ERR_INVALID_ARG;
     }
 
+    /*
+     * ESP32-S3 TX+RX share one RMT group. An armed continuous RX can stall
+     * long AC TX frames (timeout / peripheral wedging). Always stop RX first.
+     */
+    rmt_ir_stop_receive();
+
     if (carrier_hz == 0) {
         carrier_hz = 38000;
     }
@@ -256,7 +282,15 @@ esp_err_t rmt_ir_transmit(const std::vector<int> &timings_us,
         rmt_transmit(s_tx, s_copy_encoder, symbols.data(),
                      symbols.size() * sizeof(rmt_symbol_word_t), &tx_cfg);
     if (err == ESP_OK) {
-        err = rmt_tx_wait_all_done(s_tx, pdMS_TO_TICKS(2000));
+        /* Long AC frames (e.g. BOSCH144) need more than 2s under load. */
+        err = rmt_tx_wait_all_done(s_tx, pdMS_TO_TICKS(5000));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "rmt_tx_wait_all_done: %s (symbols=%u)",
+                     esp_err_to_name(err),
+                     static_cast<unsigned>(symbols.size()));
+        }
+    } else {
+        ESP_LOGW(TAG, "rmt_transmit failed: %s", esp_err_to_name(err));
     }
 
     s_busy = false;
@@ -301,11 +335,16 @@ bool rmt_ir_rx_armed()
 void rmt_ir_stop_receive()
 {
     s_rx_armed = false;
+    s_frame_ready = false;
     /* Disabling/enabling clears an in-flight receive cleanly. */
     if (s_rx) {
         rmt_disable(s_rx);
         rmt_enable(s_rx);
     }
+    if (s_rx_queue) {
+        xQueueReset(s_rx_queue);
+    }
+    s_last_frame_us.clear();
 }
 
 bool rmt_ir_frame_ready()
