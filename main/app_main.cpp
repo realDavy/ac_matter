@@ -10,6 +10,7 @@
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_netif.h>
 #include <esp_random.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
@@ -934,6 +935,29 @@ static void app_request_post_commission_ui(void)
     app_try_start_pending_post_commission_ui();
 }
 
+static void app_set_wifi_hostname(void)
+{
+    /* Router / DHCP client name. Keep DNS-safe (no spaces); Matter ProductName
+     * remains "Air Conditioner". Overrides default CONFIG_LWIP_LOCAL_HOSTNAME
+     * ("espressif") once the station netif exists. Prefer STA_START so DHCP
+     * picks it up. */
+    static constexpr const char *k_hostname = "Air_Conditioner";
+
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) {
+        ESP_LOGW(TAG, "WIFI_STA_DEF missing; cannot set hostname");
+        return;
+    }
+
+    const esp_err_t err = esp_netif_set_hostname(netif, k_hostname);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_netif_set_hostname(\"%s\") failed: %s",
+                 k_hostname, esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "Wi-Fi hostname set to \"%s\"", k_hostname);
+}
+
 static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data)
 {
@@ -958,6 +982,7 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
 #if CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_SW_COEXIST_ENABLE
         esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
 #endif
+        app_set_wifi_hostname();
     } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
         const auto *ev =
             static_cast<const wifi_event_sta_connected_t *>(event_data);
@@ -965,6 +990,8 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
                  ev->ssid_len, reinterpret_cast<const char *>(ev->ssid),
                  static_cast<unsigned>(ev->channel),
                  static_cast<unsigned>(ev->authmode));
+        /* Ensure hostname is applied even if STA_START was missed. */
+        app_set_wifi_hostname();
     }
 }
 
@@ -1214,6 +1241,9 @@ extern "C" void app_main()
         if (wifi_evt_err != ESP_OK) {
             ESP_LOGW(TAG, "Wi-Fi event handler register failed: %s",
                      esp_err_to_name(wifi_evt_err));
+        } else {
+            /* STA may already be up; apply hostname immediately if possible. */
+            app_set_wifi_hostname();
         }
     }
 
