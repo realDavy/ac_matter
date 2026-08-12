@@ -499,9 +499,6 @@ public:
 
 static AppSubscriptionCallback s_subscription_callback;
 
-static void app_start_pairing_display_timer(chip::System::Layer *layer,
-                                            void *appState);
-
 /*
  * After a cancelled / failed attempt, Matter may keep the post-PASE fail-safe
  * armed for ~60s and leave BLE commissionable advertising off. Force recovery
