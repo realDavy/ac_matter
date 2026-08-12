@@ -1241,6 +1241,9 @@ extern "C" void app_main()
         if (wifi_evt_err != ESP_OK) {
             ESP_LOGW(TAG, "Wi-Fi event handler register failed: %s",
                      esp_err_to_name(wifi_evt_err));
+        } else {
+            /* STA may already be up; apply hostname immediately if possible. */
+            app_set_wifi_hostname();
         }
     }
 
