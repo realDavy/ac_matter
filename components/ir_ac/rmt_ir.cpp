@@ -16,18 +16,14 @@ namespace {
 static const char *TAG = "rmt_ir";
 
 static constexpr size_t kMaxSymbols = 512;
-/* TX stays at 1 us/tick for accurate carrier marks. */
-static constexpr uint32_t kTxResolutionHz = 1000000;
 /*
- * RX uses a coarser tick so signal_range_max_ns can cover AC frame gaps.
- * At 1 MHz, ESP-IDF caps idle at ~32.767 ms (15-bit duration); that made
- * rmt_receive() fail with ESP_ERR_INVALID_ARG and IR learn never armed.
- * 250 kHz → 4 us/tick → max idle ≈ 131 ms.
+ * TX and RX must share the same resolution on ESP32-S3 (one RMT group
+ * prescale). 250 kHz RX + 1 MHz TX caused: channel prescale out of range.
+ * At 1 MHz, signal_range_max_ns must stay under ~32767000 (15-bit ticks).
  */
-static constexpr uint32_t kRxResolutionHz = 250000;
-static constexpr uint32_t kRxUsPerTick = 1000000 / kRxResolutionHz;
+static constexpr uint32_t kResolutionHz = 1000000; /* 1 us / tick */
 static constexpr uint32_t kRxMinNs = 2000;
-static constexpr uint32_t kRxMaxNs = 100000000; /* 100 ms idle ends a frame */
+static constexpr uint32_t kRxMaxNs = 32000000; /* ~32 ms idle ends a frame */
 static rmt_channel_handle_t s_tx = nullptr;
 static rmt_channel_handle_t s_rx = nullptr;
 static rmt_encoder_handle_t s_copy_encoder = nullptr;
@@ -63,11 +59,12 @@ static void symbols_to_timings(const rmt_symbol_word_t *symbols,
     out->reserve(count * 2);
     for (size_t i = 0; i < count; ++i) {
         const auto &sym = symbols[i];
+        /* resolution is 1 MHz → duration ticks == microseconds */
         if (sym.duration0 > 0) {
-            out->push_back(static_cast<uint32_t>(sym.duration0) * kRxUsPerTick);
+            out->push_back(sym.duration0);
         }
         if (sym.duration1 > 0) {
-            out->push_back(static_cast<uint32_t>(sym.duration1) * kRxUsPerTick);
+            out->push_back(sym.duration1);
         }
     }
 }
@@ -97,7 +94,7 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     rmt_tx_channel_config_t tx_cfg = {};
     tx_cfg.gpio_num = tx_gpio;
     tx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
-    tx_cfg.resolution_hz = kTxResolutionHz;
+    tx_cfg.resolution_hz = kResolutionHz;
     tx_cfg.mem_block_symbols = 64;
     tx_cfg.trans_queue_depth = 4;
 
@@ -106,7 +103,7 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     rmt_rx_channel_config_t rx_cfg = {};
     rx_cfg.gpio_num = rx_gpio;
     rx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
-    rx_cfg.resolution_hz = kRxResolutionHz;
+    rx_cfg.resolution_hz = kResolutionHz;
     rx_cfg.mem_block_symbols = 128;
 
     rmt_rx_event_callbacks_t cbs = {
@@ -175,7 +172,7 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     ESP_LOGI(TAG, "RMT IR ready: TX=GPIO%d RX=GPIO%d @%uHz "
                   "(idle level=%d, expect 1)",
              static_cast<int>(tx_gpio), static_cast<int>(rx_gpio),
-             static_cast<unsigned>(kRxResolutionHz), gpio_get_level(rx_gpio));
+             static_cast<unsigned>(kResolutionHz), gpio_get_level(rx_gpio));
     return ESP_OK;
 }
 
