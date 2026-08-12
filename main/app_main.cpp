@@ -1160,6 +1160,13 @@ static void app_start_ui_peripherals(void)
 {
     ESP_LOGI(TAG, "Starting LCD/SHT30 peripherals (free heap=%u)",
              static_cast<unsigned>(esp_get_free_heap_size()));
+    /*
+     * IR may have failed to start during early boot (heap pressure before
+     * BLE teardown). Retry once the LEARN/AC UI is about to appear.
+     */
+    if (app_driver_ir_ensure_ready() != ESP_OK) {
+        ESP_LOGW(TAG, "IR path still unavailable after UI restore");
+    }
     app_start_display_ui();
     app_start_sht30();
 }

@@ -74,10 +74,19 @@ static void symbols_to_timings(const rmt_symbol_word_t *symbols,
 
 }  // namespace
 
+void rmt_ir_deinit();
+
 esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
 {
-    if (s_tx != nullptr || s_rx != nullptr) {
+    if (s_tx != nullptr && s_rx != nullptr) {
         return ESP_OK;
+    }
+
+    /* Partial init from a previous failure — tear down and retry cleanly. */
+    if (s_tx != nullptr || s_rx != nullptr || s_copy_encoder != nullptr ||
+        s_rx_queue != nullptr) {
+        ESP_LOGW(TAG, "Cleaning partial RMT IR state before re-init");
+        rmt_ir_deinit();
     }
 
     s_rx_queue = xQueueCreate(4, sizeof(RxDoneMsg));
@@ -91,26 +100,56 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
     tx_cfg.resolution_hz = kTxResolutionHz;
     tx_cfg.mem_block_symbols = 64;
     tx_cfg.trans_queue_depth = 4;
-    ESP_RETURN_ON_ERROR(rmt_new_tx_channel(&tx_cfg, &s_tx), TAG, "tx channel");
 
     rmt_copy_encoder_config_t copy_cfg = {};
-    ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&copy_cfg, &s_copy_encoder), TAG,
-                        "copy encoder");
-
-    s_carrier = {};
-    s_carrier.frequency_hz = 38000;
-    s_carrier.duty_cycle = 0.33f;
-    ESP_RETURN_ON_ERROR(
-        rmt_apply_carrier(s_tx, &s_carrier), TAG, "carrier");
-
-    ESP_RETURN_ON_ERROR(rmt_enable(s_tx), TAG, "enable tx");
 
     rmt_rx_channel_config_t rx_cfg = {};
     rx_cfg.gpio_num = rx_gpio;
     rx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
     rx_cfg.resolution_hz = kRxResolutionHz;
     rx_cfg.mem_block_symbols = 128;
-    ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&rx_cfg, &s_rx), TAG, "rx channel");
+
+    rmt_rx_event_callbacks_t cbs = {
+        .on_recv_done = rx_done_callback,
+    };
+
+    esp_err_t err = rmt_new_tx_channel(&tx_cfg, &s_tx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "tx channel: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
+
+    err = rmt_new_copy_encoder(&copy_cfg, &s_copy_encoder);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "copy encoder: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
+
+    s_carrier = {};
+    s_carrier.frequency_hz = 38000;
+    s_carrier.duty_cycle = 0.33f;
+    err = rmt_apply_carrier(s_tx, &s_carrier);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "carrier: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
+
+    err = rmt_enable(s_tx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "enable tx: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
+
+    err = rmt_new_rx_channel(&rx_cfg, &s_rx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rx channel: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
 
     /*
      * Demodulating receivers (VS1838 / HS0038 / RM Mini IR) idle HIGH and
@@ -119,14 +158,19 @@ esp_err_t rmt_ir_init(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
      */
     (void)gpio_set_pull_mode(rx_gpio, GPIO_PULLUP_ONLY);
 
-    rmt_rx_event_callbacks_t cbs = {
-        .on_recv_done = rx_done_callback,
-    };
-    ESP_RETURN_ON_ERROR(
-        rmt_rx_register_event_callbacks(s_rx, &cbs, s_rx_queue), TAG,
-        "rx callbacks");
+    err = rmt_rx_register_event_callbacks(s_rx, &cbs, s_rx_queue);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rx callbacks: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
 
-    ESP_RETURN_ON_ERROR(rmt_enable(s_rx), TAG, "enable rx");
+    err = rmt_enable(s_rx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "enable rx: %s", esp_err_to_name(err));
+        rmt_ir_deinit();
+        return err;
+    }
 
     ESP_LOGI(TAG, "RMT IR ready: TX=GPIO%d RX=GPIO%d @%uHz "
                   "(idle level=%d, expect 1)",

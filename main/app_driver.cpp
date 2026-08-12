@@ -1724,7 +1724,7 @@ static esp_err_t app_driver_ir_start_worker()
     BaseType_t result = xTaskCreate(
         app_driver_ir_worker_task,
         "ir_worker",
-        6144,
+        8192,
         nullptr,
         5,
         &s_ir_worker_task_handle);
@@ -2051,12 +2051,52 @@ static bool app_driver_ir_load_pairing()
     return true;
 }
 
+static esp_err_t app_driver_ir_init();
+static esp_err_t app_driver_ir_start_worker();
+
+esp_err_t app_driver_ir_ensure_ready(void)
+{
+    if (s_ac == nullptr) {
+        ESP_LOGW(TAG_IR,
+                 "IR controller missing; initializing now (free heap=%u)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        esp_err_t err = app_driver_ir_init();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG_IR, "IR init failed: %s (free heap=%u)",
+                     esp_err_to_name(err),
+                     static_cast<unsigned>(esp_get_free_heap_size()));
+            return err;
+        }
+    }
+
+    if (s_ir_command_queue == nullptr ||
+        s_ir_worker_task_handle == nullptr) {
+        ESP_LOGW(TAG_IR,
+                 "IR worker missing; starting now (free heap=%u)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        esp_err_t err = app_driver_ir_start_worker();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG_IR, "IR worker start failed: %s (free heap=%u)",
+                     esp_err_to_name(err),
+                     static_cast<unsigned>(esp_get_free_heap_size()));
+            return err;
+        }
+    }
+
+    return ESP_OK;
+}
+
 static void app_driver_ir_request_pairing_toggle()
 {
     if (s_factory_reset_in_progress.load()) {
         ESP_LOGW(
             TAG_IR,
             "Cannot toggle pairing during factory reset");
+        return;
+    }
+
+    if (app_driver_ir_ensure_ready() != ESP_OK) {
+        ESP_LOGE(TAG_IR, "Cannot toggle pairing: IR path not ready");
         return;
     }
 
@@ -2541,7 +2581,12 @@ esp_err_t app_driver_room_air_conditioner_set_defaults(
 
 static esp_err_t app_driver_ir_init()
 {
-    ESP_LOGI(TAG_IR, "IRremoteESP8266 AC init start");
+    if (s_ac != nullptr) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG_IR, "IRremoteESP8266 AC init start (free heap=%u)",
+             static_cast<unsigned>(esp_get_free_heap_size()));
     ESP_LOGI(TAG_IR, "TX=GPIO%d RX=GPIO%d",
              static_cast<int>(IR_TX_PIN),
              static_cast<int>(IR_RX_PIN));
@@ -2550,7 +2595,9 @@ static esp_err_t app_driver_ir_init()
 
     esp_err_t err = s_ac->begin(IR_TX_PIN, IR_RX_PIN);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_IR, "IrAcController begin failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG_IR, "IrAcController begin failed: %s (free heap=%u)",
+                 esp_err_to_name(err),
+                 static_cast<unsigned>(esp_get_free_heap_size()));
         s_ac.reset();
         return err;
     }
@@ -2592,25 +2639,13 @@ app_driver_handle_t app_driver_room_air_conditioner_init()
     }
 
     /* Initialize IRremoteESP8266 AC hardware path */
-    esp_err_t err = app_driver_ir_init();
+    esp_err_t err = app_driver_ir_ensure_ready();
     if (err != ESP_OK) {
         ESP_LOGE(TAG_IR,
-                 "IR AC init failed, Matter app will continue");
-    } else {
-        esp_err_t worker_err =
-            app_driver_ir_start_worker();
-
-        if (worker_err != ESP_OK) {
-            ESP_LOGE(
-                TAG_IR,
-                "IR worker task init failed: %s",
-                esp_err_to_name(worker_err));
-        }
-
-        if (s_ir_paired.load()) {
-            app_driver_led_set_mode(
-                LED_MODE_BREATH_3S);
-        }
+                 "IR AC init/worker failed at boot (%s); will retry on Learn",
+                 esp_err_to_name(err));
+    } else if (s_ir_paired.load()) {
+        app_driver_led_set_mode(LED_MODE_BREATH_3S);
     }
 
 // Return a dummy address (placeholder) to prevent crashes if lower layers check `if (handle == NULL)` or dereference it

@@ -113,6 +113,8 @@ esp_err_t app_driver_temp_light_set_brightness(esp_matter_attr_val_t *val);
 bool app_driver_ir_is_paired(void);
 bool app_driver_ir_is_pairing(void);
 void app_driver_ir_start_learn(void);
+/** Ensure IR controller + worker queue exist (safe to call repeatedly). */
+esp_err_t app_driver_ir_ensure_ready(void);
 void app_driver_ui_toggle_power(void);
 void app_driver_ui_adjust_temp(int delta);
 void app_driver_ui_get_ac_state(int *temp_c, bool *power_on);
