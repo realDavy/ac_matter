@@ -548,10 +548,17 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
         ESP_LOGI(TAG, "Commissioning failed, fail safe timer expired");
         s_commissioning_in_progress = false;
+        app_driver_update_led_states();
         app_schedule_work([](intptr_t /*arg*/) {
-            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
-                app_start_pairing_display();
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() != 0) {
+                return;
             }
+            if (s_chipoble_connected) {
+                ESP_LOGI(TAG,
+                         "Fail-safe expired; defer pairing UI until CHIPoBLE closes");
+                return;
+            }
+            app_start_pairing_display();
         });
         break;
 
