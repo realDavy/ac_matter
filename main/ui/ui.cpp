@@ -419,14 +419,7 @@ static void show_pairing_fail(void)
     lv_obj_set_style_text_align(s_subtitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_subtitle, LV_ALIGN_CENTER, 0, 12);
     lv_label_set_text(s_subtitle, s->pairing_fail_hint);
-
-    if (s_qr_img) {
-#if LVGL_VERSION_MAJOR >= 9
-        lv_image_set_src(s_qr_img, nullptr);
-#else
-        lv_img_set_src(s_qr_img, nullptr);
-#endif
-    }
+    /* QR already hidden by hide_all_controls(); do not clear img src. */
 }
 
 static void restore_default_chrome(void)

@@ -991,8 +991,8 @@ static void app_start_pairing_display(void)
 }
 
 /*
- * After a cancelled / failed attempt: show "配网失败 / 请检查是否为2.4G WiFi"
- * briefly, then return to the pairing QR.
+ * After a cancelled / failed attempt: show the fail tip briefly
+ * ("请重新配网 / 请用2.4G WiFi"), then return to the pairing QR.
  */
 static void app_start_pairing_display_after_fail(void)
 {
