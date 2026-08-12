@@ -323,15 +323,25 @@ static void show_pairing(void)
     lv_label_set_text(s_subtitle, s->pairing_hint);
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 38);
 
-    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, 2);
+    /* Nudge QR up a bit to leave room for the 2.4G Wi-Fi tip below. */
+    lv_obj_align(s_qr_img, LV_ALIGN_CENTER, 0, -8);
     lv_obj_clear_flag(s_qr_img, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_hint, &ui_font_cn_18, 0);
+    lv_obj_set_style_text_color(s_hint, lv_color_hex(kColBody), 0);
+    lv_obj_set_width(s_hint, 180);
+    lv_label_set_long_mode(s_hint, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_hint, s->pairing_wifi_hint);
+    lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -52);
 
     lv_obj_set_style_text_font(s_code_label, &ui_font_cn_18, 0);
     lv_obj_set_style_text_color(s_code_label, lv_color_hex(kColBody), 0);
     lv_obj_set_width(s_code_label, 180);
     lv_label_set_long_mode(s_code_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_code_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_align(s_code_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_clear_flag(s_code_label, LV_OBJ_FLAG_HIDDEN);
 
 #if 0 /* English toggle temporarily disabled */
