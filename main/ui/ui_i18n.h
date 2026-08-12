@@ -48,8 +48,11 @@ static inline const ui_strings_t *ui_strings(bool english)
         .pairing_wifi_hint = "请用2.4G WiFi",
         .pairing_busy_title = "配对中...",
         .pairing_busy_hint = "请在手机上完成添加",
-        .pairing_fail_title = "配网失败",
-        .pairing_fail_hint = "请检查是否为2.4G WiFi",
+        /* Keep to glyphs already in ui_font_cn_*; new CJK forced a full
+         * font regen that blanked the panel after flash (BL stays off until
+         * first LVGL frame). */
+        .pairing_fail_title = "请重新配网",
+        .pairing_fail_hint = "请用2.4G WiFi",
         .manual_code = "配对码",
         .learn_title = "红外学习",
         .learn_hint = "对准遥控按任意键",
@@ -86,8 +89,8 @@ static inline const ui_strings_t *ui_strings(bool english)
         .pairing_wifi_hint = "Use 2.4GHz Wi-Fi",
         .pairing_busy_title = "Pairing...",
         .pairing_busy_hint = "Finish setup on your phone",
-        .pairing_fail_title = "Setup Failed",
-        .pairing_fail_hint = "Check that Wi-Fi is 2.4GHz",
+        .pairing_fail_title = "Try Setup Again",
+        .pairing_fail_hint = "Use 2.4GHz Wi-Fi",
         .manual_code = "Setup Code",
         .learn_title = "IR Learn",
         .learn_hint = "Aim remote, press any key",
