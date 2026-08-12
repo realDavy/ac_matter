@@ -51,6 +51,7 @@
 
 #include <app/server/CommissioningWindowManager.h>
 #include <app/server/Server.h>
+#include <app/FailSafeContext.h>
 
 static const char *TAG = "app_main";
 uint16_t room_air_conditioner_endpoint_id = 0;
@@ -92,6 +93,11 @@ static void app_start_sht30(void);
 static void app_start_ui_peripherals(void);
 static void app_request_post_commission_ui(void);
 static void app_try_start_pending_post_commission_ui(void);
+static bool app_restore_commissionable_advertising(void);
+static void app_retry_commissionable_advertising(chip::System::Layer *layer,
+                                                 void *appState);
+static void app_start_pairing_display_timer(chip::System::Layer *layer,
+                                            void *appState);
 
 static void app_schedule_work(chip::DeviceLayer::AsyncWorkFunct work,
                               intptr_t arg = 0)
@@ -493,6 +499,126 @@ public:
 
 static AppSubscriptionCallback s_subscription_callback;
 
+/*
+ * After a cancelled / failed attempt, Matter may keep the post-PASE fail-safe
+ * armed for ~60s and leave BLE commissionable advertising off. Force recovery
+ * so a second scan can connect immediately while the pairing QR is shown.
+ *
+ * Returns true if LVGL restore should be deferred briefly so advertising can
+ * reclaim heap first (fail-safe force-expiry path).
+ */
+static bool app_restore_commissionable_advertising(void)
+{
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+        return false;
+    }
+
+    auto &fail_safe = chip::Server::GetInstance().GetFailSafeContext();
+    if (fail_safe.IsFailSafeArmed()) {
+        ESP_LOGI(TAG,
+                 "Cancel/drop: forcing fail-safe expiry to restart PASE advertising");
+        fail_safe.ForceFailSafeTimerExpiry();
+        /*
+         * ForceFailSafeTimerExpiry posts async cleanup. AdvertiseAndListenForPASE
+         * usually runs from that path; if Cleanup closed the window instead,
+         * retry reopen once fail-safe is fully disarmed.
+         */
+        (void)chip::DeviceLayer::SystemLayer().CancelTimer(
+            app_retry_commissionable_advertising, nullptr);
+        (void)chip::DeviceLayer::SystemLayer().StartTimer(
+            chip::System::Clock::Milliseconds32(500),
+            app_retry_commissionable_advertising, nullptr);
+        return true;
+    }
+
+    auto &commission_mgr =
+        chip::Server::GetInstance().GetCommissioningWindowManager();
+    if (!commission_mgr.IsCommissioningWindowOpen()) {
+        constexpr auto kTimeoutSeconds =
+            chip::System::Clock::Seconds16(k_timeout_seconds);
+        CHIP_ERROR err = commission_mgr.OpenBasicCommissioningWindow(
+            kTimeoutSeconds,
+            chip::CommissioningWindowAdvertisement::kAllSupported);
+        if (err != CHIP_NO_ERROR) {
+            ESP_LOGE(TAG,
+                     "Failed to reopen commissioning window: %" CHIP_ERROR_FORMAT,
+                     err.Format());
+            (void)chip::DeviceLayer::SystemLayer().CancelTimer(
+                app_retry_commissionable_advertising, nullptr);
+            (void)chip::DeviceLayer::SystemLayer().StartTimer(
+                chip::System::Clock::Seconds16(1),
+                app_retry_commissionable_advertising, nullptr);
+        } else {
+            ESP_LOGI(TAG, "Commissioning window reopened (BLE+DNS-SD)");
+        }
+        return false;
+    }
+
+    /*
+     * Window still open (typical pre-PASE cancel): BLE advertising often stays
+     * disabled after the previous GATT connection. Re-enable it.
+     */
+    CHIP_ERROR ble_err =
+        chip::DeviceLayer::ConnectivityMgr().SetBLEAdvertisingEnabled(true);
+    if (ble_err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG, "SetBLEAdvertisingEnabled(true) failed: %" CHIP_ERROR_FORMAT,
+                 ble_err.Format());
+    } else {
+        ESP_LOGI(TAG, "BLE commissionable advertising re-enabled");
+    }
+    return false;
+}
+
+static void app_start_pairing_display_timer(chip::System::Layer * /*layer*/,
+                                            void * /*appState*/)
+{
+    app_schedule_work([](intptr_t /*arg*/) {
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
+            app_start_pairing_display();
+        }
+    });
+}
+
+static void app_retry_commissionable_advertising(chip::System::Layer * /*layer*/,
+                                                 void * /*appState*/)
+{
+    app_schedule_work([](intptr_t /*arg*/) {
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+            return;
+        }
+
+        auto &fail_safe = chip::Server::GetInstance().GetFailSafeContext();
+        if (!fail_safe.IsFailSafeFullyDisarmed()) {
+            ESP_LOGI(TAG, "Fail-safe still busy; retry advertising restore soon");
+            (void)chip::DeviceLayer::SystemLayer().StartTimer(
+                chip::System::Clock::Milliseconds32(500),
+                app_retry_commissionable_advertising, nullptr);
+            return;
+        }
+
+        auto &commission_mgr =
+            chip::Server::GetInstance().GetCommissioningWindowManager();
+        if (commission_mgr.IsCommissioningWindowOpen()) {
+            (void)chip::DeviceLayer::ConnectivityMgr().SetBLEAdvertisingEnabled(true);
+            ESP_LOGI(TAG, "Commissioning window open after cancel; BLE advertising on");
+            return;
+        }
+
+        constexpr auto kTimeoutSeconds =
+            chip::System::Clock::Seconds16(k_timeout_seconds);
+        CHIP_ERROR err = commission_mgr.OpenBasicCommissioningWindow(
+            kTimeoutSeconds,
+            chip::CommissioningWindowAdvertisement::kAllSupported);
+        if (err != CHIP_NO_ERROR) {
+            ESP_LOGE(TAG,
+                     "Retry reopen commissioning window failed: %" CHIP_ERROR_FORMAT,
+                     err.Format());
+        } else {
+            ESP_LOGI(TAG, "Commissioning window reopened after fail-safe cleanup");
+        }
+    });
+}
+
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
     switch (event->Type) {
@@ -520,16 +646,24 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
             if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
                 /*
                  * Uncommissioned + BLE gone ⇒ phone cancelled or PASE dropped.
-                 * Restore the pairing QR immediately. Waiting for
-                 * kCommissioningSessionStopped / kFailSafeTimerExpired can take
-                 * up to ~60s (Matter fail-safe after PASE) while the panel is
-                 * stuck on the frozen "配对中..." frame.
+                 * Restart commissionable advertising immediately (otherwise
+                 * post-PASE fail-safe leaves BLE dark for ~60s). Defer LVGL/QR
+                 * briefly when fail-safe was forced so advertising wins the heap.
                  */
                 if (s_commissioning_in_progress) {
                     s_commissioning_in_progress = false;
                     app_driver_update_led_states();
                 }
-                app_start_pairing_display();
+                const bool defer_ui = app_restore_commissionable_advertising();
+                (void)chip::DeviceLayer::SystemLayer().CancelTimer(
+                    app_start_pairing_display_timer, nullptr);
+                if (defer_ui) {
+                    (void)chip::DeviceLayer::SystemLayer().StartTimer(
+                        chip::System::Clock::Milliseconds32(400),
+                        app_start_pairing_display_timer, nullptr);
+                } else {
+                    app_start_pairing_display();
+                }
             } else {
                 /* BLE heap is back; safe to bring up the normal UI. */
                 app_try_start_pending_post_commission_ui();
