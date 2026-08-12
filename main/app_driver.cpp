@@ -2163,7 +2163,7 @@ static bool app_driver_ir_load_pairing()
     s_ir_paired.store(true);
     /* Avoid arming continuous IR RX while Matter is still bringing up. */
     s_ir_parse_earliest_tick =
-        xTaskGetTickCount() + pdMS_TO_TICKS(2000);
+        xTaskGetTickCount() + pdMS_TO_TICKS(k_ir_parse_settle_ms);
 
     ESP_LOGI(TAG_IR,
              "IR pairing restored: protocol=%s model=%d alt_index=%u",
