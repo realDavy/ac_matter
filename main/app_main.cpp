@@ -35,9 +35,10 @@
 #include <platform/ESP32/ESP32Config.h>
 #include <app/InteractionModelEngine.h>
 #include <app/ReadHandler.h>
-#include <app-common/zap-generated/attributes/Accessors.h>
+#include <app/util/attribute-table.h>
 #include <esp_matter_providers.h>
 #include <lib/support/Span.h>
+#include <protocols/interaction_model/StatusCode.h>
 
 #include "unique_commissionable_data_provider.h"
 #include "sht30.h"
@@ -341,36 +342,42 @@ static void app_set_default_node_label(node_t *node)
     ESP_LOGI(TAG, "NodeLabel set to \"%s\"", name);
 }
 
-/** Apply NodeLabel via CHIP Accessors (works when esp-matter set_val cannot). */
-static void app_apply_node_label_via_accessors(intptr_t /*arg*/)
+/**
+ * Apply NodeLabel after Matter start.
+ *
+ * Newer esp-matter serves BasicInformation via a code-driven cluster, so
+ * attribute::set_val and Accessors::Set are unavailable. emberAfWriteAttribute
+ * still routes the write into that cluster (updates RAM + persistence).
+ */
+static void app_apply_node_label_after_start(intptr_t /*arg*/)
 {
     using chip::app::Clusters::BasicInformation;
+    using chip::Protocols::InteractionModel::Status;
 
-    char existing[64] = {};
-    chip::MutableCharSpan existing_span(existing, sizeof(existing) - 1);
-    const CHIP_ERROR get_err =
-        BasicInformation::Attributes::NodeLabel::Get(0, existing_span);
-    if (get_err == CHIP_NO_ERROR && existing_span.size() > 0) {
-        existing[existing_span.size()] = '\0';
-        const bool stock_name =
-            std::strcmp(existing, k_device_name) == 0 ||
-            std::strcmp(existing, "AC Remote") == 0 ||
-            std::strcmp(existing, "Air AC Remote") == 0 ||
-            std::strcmp(existing, "Matter Accessory") == 0;
-        if (!stock_name) {
-            ESP_LOGI(TAG, "NodeLabel (Accessors) \"%s\"; leaving unchanged", existing);
-            return;
-        }
-    }
-
-    const CHIP_ERROR set_err = BasicInformation::Attributes::NodeLabel::Set(
-        0, chip::CharSpan(k_device_name, std::strlen(k_device_name)));
-    if (set_err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "NodeLabel Accessors::Set failed: %" CHIP_ERROR_FORMAT,
-                 set_err.Format());
+    const size_t len = std::strlen(k_device_name);
+    /* ZCL short string: 1-byte length prefix + payload (max 32 for NodeLabel). */
+    constexpr size_t k_max = 32;
+    if (len == 0 || len > k_max) {
+        ESP_LOGE(TAG, "NodeLabel length %u invalid", static_cast<unsigned>(len));
         return;
     }
-    ESP_LOGI(TAG, "NodeLabel (Accessors) set to \"%s\"", k_device_name);
+
+    uint8_t zcl_str[k_max + 1] = {};
+    zcl_str[0] = static_cast<uint8_t>(len);
+    std::memcpy(&zcl_str[1], k_device_name, len);
+
+    const Status status = emberAfWriteAttribute(
+        0 /* root */,
+        BasicInformation::Id,
+        BasicInformation::Attributes::NodeLabel::Id,
+        zcl_str,
+        ZCL_CHAR_STRING_ATTRIBUTE_TYPE);
+    if (status != Status::Success) {
+        ESP_LOGE(TAG, "NodeLabel emberAfWriteAttribute failed: 0x%x",
+                 static_cast<unsigned>(status));
+        return;
+    }
+    ESP_LOGI(TAG, "NodeLabel set to \"%s\" (emberAfWriteAttribute)", k_device_name);
 }
 
 /*
@@ -1525,9 +1532,9 @@ extern "C" void app_main()
 
     /*
      * Newer esp-matter marks NodeLabel MANAGED_INTERNALLY so early set_val
-     * fails. Apply via CHIP Accessors on the Matter stack after start.
+     * fails. Apply via emberAfWriteAttribute on the Matter stack after start.
      */
-    app_schedule_work(app_apply_node_label_via_accessors);
+    app_schedule_work(app_apply_node_label_after_start);
 
     /*
      * Register after Matter start: the default esp_event loop is created by
