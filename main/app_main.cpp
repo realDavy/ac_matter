@@ -78,6 +78,7 @@ static bool s_pending_post_commission_ui = false;
 
 static constexpr const char *k_device_name = "AC Remote";
 static constexpr size_t k_serial_buf_size = 17; // 12 hex chars + NUL, with headroom
+static char s_serial_number[k_serial_buf_size] = {};
 
 static void sht30_temperature_notification(uint16_t endpoint_id, float temp_c,
                                            void *user_data);
@@ -103,45 +104,118 @@ static void app_schedule_work(chip::DeviceLayer::AsyncWorkFunct work,
 }
 
 /**
- * Ensure a persistent Matter SerialNumber exists.
+ * Ensure a persistent Matter SerialNumber exists in chip-factory NVS.
  * Format: 8 random hex digits + last 4 hex digits of the Wi-Fi STA MAC.
  * Example: A1B2C3D4E5F6 where E5F6 comes from MAC bytes 4 and 5.
+ *
+ * Returns true and fills @p out when a usable serial is available.
+ * Writing NVS alone is not enough for controllers: SerialNumber is an
+ * optional Basic Information attribute and must also be created on the
+ * data model (see app_expose_serial_number).
  */
-static void app_ensure_serial_number()
+static bool app_ensure_serial_number(char *out, size_t out_size)
 {
     using chip::DeviceLayer::Internal::ESP32Config;
 
-    char serial[k_serial_buf_size] = {};
-    size_t serial_len = 0;
+    if (out == nullptr || out_size < 13) {
+        return false;
+    }
+    out[0] = '\0';
 
+    /*
+     * nvs_flash_init() only brings up the default partition. chip-factory
+     * may live on a dedicated label (often "fctry"); open/init it first so
+     * Read/WriteConfigValueStr do not fail with NVS_NOT_INITIALIZED.
+     */
+    {
+        const esp_err_t part_err =
+            nvs_flash_init_partition(CHIP_DEVICE_CONFIG_CHIP_FACTORY_NAMESPACE_PARTITION);
+        if (part_err != ESP_OK && part_err != ESP_ERR_NVS_NO_FREE_PAGES &&
+            part_err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            ESP_LOGW(TAG, "Factory NVS init (%s): %s",
+                     CHIP_DEVICE_CONFIG_CHIP_FACTORY_NAMESPACE_PARTITION,
+                     esp_err_to_name(part_err));
+        }
+    }
+
+    size_t serial_len = 0;
     CHIP_ERROR err = ESP32Config::ReadConfigValueStr(
-        ESP32Config::kConfigKey_SerialNum, serial, sizeof(serial), serial_len);
+        ESP32Config::kConfigKey_SerialNum, out, out_size, serial_len);
 
     if (err == CHIP_NO_ERROR && serial_len > 0) {
-        ESP_LOGI(TAG, "SerialNumber: %s", serial);
-        return;
+        ESP_LOGI(TAG, "SerialNumber: %s", out);
+        return true;
     }
 
     uint8_t mac[6] = {};
     esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
     if (mac_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read MAC for SerialNumber, err=%d", mac_err);
-        return;
+        return false;
     }
 
     uint8_t rnd[4] = {};
     esp_fill_random(rnd, sizeof(rnd));
 
-    std::snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X",
+    std::snprintf(out, out_size, "%02X%02X%02X%02X%02X%02X",
                   rnd[0], rnd[1], rnd[2], rnd[3], mac[4], mac[5]);
 
-    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_SerialNum, serial);
+    err = ESP32Config::WriteConfigValueStr(ESP32Config::kConfigKey_SerialNum, out);
     if (err != CHIP_NO_ERROR) {
         ESP_LOGE(TAG, "Failed to store SerialNumber, err=%" CHIP_ERROR_FORMAT, err.Format());
+        /* Still expose the in-memory value via the data model attribute. */
+    }
+
+    ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", out, mac[4], mac[5]);
+    return true;
+}
+
+/**
+ * Create Basic Information SerialNumber (optional attribute).
+ * Without this, Apple Home / chip-tool show an empty or missing serial even
+ * when chip-factory NVS already holds serial-num.
+ */
+static void app_expose_serial_number(node_t *node, char *serial)
+{
+    if (node == nullptr || serial == nullptr || serial[0] == '\0') {
+        ESP_LOGW(TAG, "Skipping SerialNumber attribute; no value");
         return;
     }
 
-    ESP_LOGI(TAG, "Generated SerialNumber: %s (MAC suffix %02X%02X)", serial, mac[4], mac[5]);
+    endpoint_t *root = endpoint::get(node, 0);
+    if (root == nullptr) {
+        ESP_LOGE(TAG, "Root endpoint missing; cannot set SerialNumber");
+        return;
+    }
+
+    cluster_t *basic = cluster::get(root, BasicInformation::Id);
+    if (basic == nullptr) {
+        ESP_LOGE(TAG, "Basic Information cluster missing; cannot set SerialNumber");
+        return;
+    }
+
+    const uint16_t serial_len = static_cast<uint16_t>(std::strlen(serial));
+
+    attribute_t *existing =
+        attribute::get(basic, BasicInformation::Attributes::SerialNumber::Id);
+    if (existing != nullptr) {
+        esp_matter_attr_val_t val = esp_matter_char_str(serial, serial_len);
+        esp_err_t set_err = attribute::set_val(existing, &val);
+        if (set_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to update SerialNumber attribute, err=%d", set_err);
+            return;
+        }
+        ESP_LOGI(TAG, "SerialNumber attribute updated to \"%s\"", serial);
+        return;
+    }
+
+    if (cluster::basic_information::attribute::create_serial_number(
+            basic, serial, serial_len) == nullptr) {
+        ESP_LOGE(TAG, "Failed to create SerialNumber attribute");
+        return;
+    }
+
+    ESP_LOGI(TAG, "SerialNumber attribute created: \"%s\"", serial);
 }
 
 /** Set default NodeLabel so controllers show "AC Remote" before the user renames it. */
@@ -200,7 +274,8 @@ static void app_set_default_node_label(node_t *node)
 static void app_set_bridged_device_identity(
     endpoint_t *endpoint,
     const char *node_label,
-    const char *product_name)
+    const char *product_name,
+    char *serial_number)
 {
     cluster_t *basic =
         cluster::get(endpoint, BridgedDeviceBasicInformation::Id);
@@ -237,6 +312,15 @@ static void app_set_bridged_device_identity(
             vendor,
             static_cast<uint16_t>(std::strlen(vendor))) != nullptr,
         ESP_LOGE(TAG, "Failed to create bridged VendorName"));
+
+    if (serial_number != nullptr && serial_number[0] != '\0') {
+        ABORT_APP_ON_FAILURE(
+            cluster::bridged_device_basic_information::attribute::create_serial_number(
+                basic,
+                serial_number,
+                static_cast<uint16_t>(std::strlen(serial_number))) != nullptr,
+            ESP_LOGE(TAG, "Failed to create bridged SerialNumber"));
+    }
 }
 
 static endpoint_t *app_create_bridged_endpoint(
@@ -259,7 +343,8 @@ static endpoint_t *app_create_bridged_endpoint(
         ESP_LOGE(TAG, "Failed to create bridged endpoint for \"%s\"",
                  node_label));
 
-    app_set_bridged_device_identity(endpoint, node_label, product_name);
+    app_set_bridged_device_identity(
+        endpoint, node_label, product_name, s_serial_number);
 
     ABORT_APP_ON_FAILURE(
         endpoint::set_parent_endpoint(endpoint, aggregator) == ESP_OK,
@@ -878,7 +963,9 @@ extern "C" void app_main()
     nvs_flash_init();
 
     /* Persist SerialNumber before Matter reads Basic Information */
-    app_ensure_serial_number();
+    if (!app_ensure_serial_number(s_serial_number, sizeof(s_serial_number))) {
+        ESP_LOGW(TAG, "SerialNumber unavailable; Home will show it empty");
+    }
 
     /* Initialize driver */
     app_driver_handle_t room_air_conditioner_handle = app_driver_room_air_conditioner_init();
@@ -891,6 +978,7 @@ extern "C" void app_main()
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
     app_set_default_node_label(node);
+    app_expose_serial_number(node, s_serial_number);
 
     /*
      * Home display mode (NVS, default COMBINED):
