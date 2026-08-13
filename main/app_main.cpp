@@ -964,6 +964,7 @@ static void sht30_temperature_notification(uint16_t /*endpoint_id*/, float temp_
                                            void * /*user_data*/)
 {
     ws2812_temp_light_set_temperature_c(temp_c);
+    app_driver_ui_set_ambient_temp_c(temp_c);
 
     const int16_t temp_x100 = static_cast<int16_t>(temp_c * 100.0f);
     chip::DeviceLayer::SystemLayer().ScheduleLambda([temp_x100]() {

@@ -20,6 +20,10 @@ typedef struct {
     const char *power_off;
     const char *cool_down;
     const char *heat_up;
+    const char *ac_current_fmt;   /* "当前 %.1f°" */
+    const char *ac_cool_to;       /* "降温至" */
+    const char *ac_heat_to;       /* "升温至" */
+    const char *ac_set_to;        /* "调温至" */
     const char *light_page;
     const char *light_title;
     const char *mode_night;
@@ -65,6 +69,10 @@ static inline const ui_strings_t *ui_strings(bool english)
         .power_off = "关闭",
         .cool_down = "降温",
         .heat_up = "升温",
+        .ac_current_fmt = "当前 %.1f°",
+        .ac_cool_to = "降温至",
+        .ac_heat_to = "升温至",
+        .ac_set_to = "调温至",
         .light_page = "灯光",
         .light_title = "氛围灯光",
         .mode_night = "夜间关闭",
@@ -104,6 +112,10 @@ static inline const ui_strings_t *ui_strings(bool english)
         .power_off = "Off",
         .cool_down = "Cooler",
         .heat_up = "Warmer",
+        .ac_current_fmt = "Now %.1f°",
+        .ac_cool_to = "Cool to",
+        .ac_heat_to = "Heat to",
+        .ac_set_to = "Set to",
         .light_page = "Light",
         .light_title = "Ambient Light",
         .mode_night = "Night Off",
