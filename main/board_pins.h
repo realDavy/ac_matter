@@ -48,9 +48,13 @@
 #define BOARD_LCD_SPI_PIXEL_CLOCK_HZ (40 * 1000 * 1000)
 /*
  * This GC9A01 module shows LVGL content horizontally reversed unless MX is
- * set (EN→NE, 汉字左右颠倒). Correct scan direction for this panel; touch X
- * is remapped to match. If a unit is still reversed after flash, try swapping
- * BOARD_LCD_MIRROR_X / BOARD_LCD_MIRROR_Y.
+ * set (EN→NE, 汉字左右颠倒). Correct scan direction for this panel.
+ *
+ * Touch is remapped independently: this module's digitizer is mirrored vs
+ * the LVGL logical frame after MADCTL MX. Flip BOARD_TOUCH_MIRROR_* if a
+ * unit still mismatches.
  */
 #define BOARD_LCD_MIRROR_X        1
 #define BOARD_LCD_MIRROR_Y        0
+#define BOARD_TOUCH_MIRROR_X      1
+#define BOARD_TOUCH_MIRROR_Y      0

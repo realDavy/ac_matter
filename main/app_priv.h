@@ -117,7 +117,15 @@ void app_driver_ir_start_learn(void);
 esp_err_t app_driver_ir_ensure_ready(void);
 void app_driver_ui_toggle_power(void);
 void app_driver_ui_adjust_temp(int delta);
+/** Set absolute setpoint (°C, clamped 16..30) and power on; queues IR + Matter. */
+void app_driver_ui_set_temp(int temp_c);
 void app_driver_ui_get_ac_state(int *temp_c, bool *power_on);
+/** Optional IR mode (0 Auto / 1 Cool / 2 Heat / 3 Dry / 4 Fan). */
+void app_driver_ui_get_ac_mode(int *mode);
+/** Latest ambient °C from SHT30 when available. Returns false if unknown. */
+bool app_driver_ui_get_ambient_temp_c(float *temp_c);
+/** Called from the SHT30 path to publish ambient temperature for the UI. */
+void app_driver_ui_set_ambient_temp_c(float temp_c);
 void app_driver_ui_set_light_brightness(uint8_t level_1_254);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD

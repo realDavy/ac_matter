@@ -51,11 +51,10 @@ static lv_obj_t *s_qr_img = nullptr;
 static lv_obj_t *s_code_label = nullptr;
 static lv_obj_t *s_btn_primary = nullptr;
 static lv_obj_t *s_btn_primary_label = nullptr;
-static lv_obj_t *s_btn_power = nullptr;
-static lv_obj_t *s_btn_power_label = nullptr;
-static lv_obj_t *s_btn_down = nullptr;
-static lv_obj_t *s_btn_up = nullptr;
-static lv_obj_t *s_temp_label = nullptr;
+static lv_obj_t *s_ac_arc = nullptr;
+static lv_obj_t *s_ac_status_label = nullptr; /* 关闭 / 降温至 */
+static lv_obj_t *s_ac_temp_label = nullptr;   /* 24.0 when on */
+static lv_obj_t *s_ac_power_hit = nullptr;    /* center tap toggles power */
 static lv_obj_t *s_mode_list = nullptr;
 static lv_obj_t *s_brightness = nullptr;
 static lv_obj_t *s_lang_btn = nullptr;
@@ -106,26 +105,31 @@ static char s_manual_code[32] = {};
 #define UI_IMAGE_SET_SRC(obj, src) lv_img_set_src((obj), (src))
 #endif
 
-/* Shared palette for the round UI (matches user-manual mock figures). */
-static constexpr uint32_t kColBg = 0x05070A;
+/* Shared palette for the round UI (AC dial matches reference mock). */
+static constexpr uint32_t kColBg = 0x121820;
+static constexpr uint32_t kColBgBot = 0x3A322C;
 static constexpr uint32_t kColTitle = 0xF2F7FA;
 static constexpr uint32_t kColMuted = 0x8FA3B3;
 static constexpr uint32_t kColBody = 0xD5E2EC;
 static constexpr uint32_t kColAccent = 0x2F6FED;
 static constexpr uint32_t kColOk = 0x1F8A5F;
-static constexpr uint32_t kColCool = 0x2B4C7E;
-static constexpr uint32_t kColHeat = 0x8B3A3A;
+static constexpr uint32_t kColArcTrack = 0x2A3340;
+static constexpr uint32_t kColArcCool = 0x3B82F6;
+static constexpr uint32_t kColKnob = 0xF5F7FA;
 static constexpr uint32_t kColChip = 0x243447;
 #if 0 /* English toggle disabled */
 static constexpr uint32_t kColLang = 0x3A4A58;
 #endif
 
+/* True while the user is dragging the AC temperature arc. */
+static bool s_ac_arc_dragging = false;
+
 static void style_circle_screen(lv_obj_t *obj)
 {
     lv_obj_set_size(obj, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
-    /* Near-black base: high QR contrast and consistent across all pages. */
     lv_obj_set_style_bg_color(obj, lv_color_hex(kColBg), 0);
-    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_grad_color(obj, lv_color_hex(kColBgBot), 0);
+    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(obj, 0, 0);
     lv_obj_set_style_radius(obj, LV_RADIUS_CIRCLE, 0);
@@ -264,10 +268,10 @@ static void hide_all_controls(void)
     hide(s_qr_img);
     hide(s_code_label);
     hide(s_btn_primary);
-    hide(s_btn_power);
-    hide(s_btn_down);
-    hide(s_btn_up);
-    hide(s_temp_label);
+    hide(s_ac_arc);
+    hide(s_ac_status_label);
+    hide(s_ac_temp_label);
+    hide(s_ac_power_hit);
     hide(s_mode_list);
     hide(s_brightness);
     hide(s_hint);
@@ -465,29 +469,75 @@ static void show_ac(void)
 
     int temp = 25;
     bool power = false;
+    int mode = 1;
     app_driver_ui_get_ac_state(&temp, &power);
+    app_driver_ui_get_ac_mode(&mode);
+    const bool show_on = power || s_ac_arc_dragging;
+
+    float ambient = static_cast<float>(temp);
+    if (!app_driver_ui_get_ambient_temp_c(&ambient)) {
+        ambient = static_cast<float>(temp);
+    }
 
     lv_label_set_text(s_title, s->ac_title);
-    lv_label_set_text(s_subtitle, s->swipe_hint);
-    lv_obj_clear_flag(s_btn_power, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_btn_down, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_btn_up, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_temp_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 16);
 
-    lv_label_set_text(s_btn_power_label, power ? s->power_off : s->power_on);
-    char tbuf[16];
-    std::snprintf(tbuf, sizeof(tbuf), "%d°", temp);
-    lv_label_set_text(s_temp_label, tbuf);
-    lv_label_set_text(s_hint, s->swipe_hint);
+    char current_buf[32];
+    std::snprintf(current_buf, sizeof(current_buf), s->ac_current_fmt, ambient);
+    lv_label_set_text(s_subtitle, current_buf);
+    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(kColMuted), 0);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_MID, 0, 42);
+    lv_obj_clear_flag(s_subtitle, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *down_lbl = lv_obj_get_child(s_btn_down, 0);
-    lv_obj_t *up_lbl = lv_obj_get_child(s_btn_up, 0);
-    if (down_lbl) {
-        lv_label_set_text(down_lbl, s->cool_down);
+    if (s_ac_arc) {
+        lv_obj_clear_flag(s_ac_arc, LV_OBJ_FLAG_HIDDEN);
+        if (!s_ac_arc_dragging) {
+            lv_arc_set_value(s_ac_arc, temp);
+        }
+        lv_obj_set_style_arc_color(
+            s_ac_arc,
+            lv_color_hex(show_on ? kColArcCool : kColArcTrack),
+            LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(
+            s_ac_arc, show_on ? LV_OPA_COVER : LV_OPA_60, LV_PART_KNOB);
     }
-    if (up_lbl) {
-        lv_label_set_text(up_lbl, s->heat_up);
+    if (s_ac_power_hit) {
+        lv_obj_clear_flag(s_ac_power_hit, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (s_ac_status_label) {
+        lv_obj_clear_flag(s_ac_status_label, LV_OBJ_FLAG_HIDDEN);
+        if (!show_on) {
+            lv_label_set_text(s_ac_status_label, s->power_off);
+            lv_obj_set_style_text_font(s_ac_status_label, &ui_font_cn_30, 0);
+            lv_obj_align(s_ac_status_label, LV_ALIGN_CENTER, 0, 0);
+        } else {
+            const char *to_label = s->ac_set_to;
+            if (mode == 1) {
+                to_label = s->ac_cool_to;
+            } else if (mode == 2) {
+                to_label = s->ac_heat_to;
+            }
+            lv_label_set_text(s_ac_status_label, to_label);
+            lv_obj_set_style_text_font(s_ac_status_label, &ui_font_cn_18, 0);
+            lv_obj_align(s_ac_status_label, LV_ALIGN_CENTER, 0, -22);
+        }
+    }
+
+    if (s_ac_temp_label) {
+        if (!show_on) {
+            lv_obj_add_flag(s_ac_temp_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            const int show_temp =
+                s_ac_arc_dragging && s_ac_arc
+                    ? lv_arc_get_value(s_ac_arc)
+                    : temp;
+            char tbuf[16];
+            std::snprintf(tbuf, sizeof(tbuf), "%d.0", show_temp);
+            lv_label_set_text(s_ac_temp_label, tbuf);
+            lv_obj_clear_flag(s_ac_temp_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_align(s_ac_temp_label, LV_ALIGN_CENTER, 0, 10);
+        }
     }
 }
 
@@ -663,20 +713,54 @@ static void on_power(lv_event_t *e)
     apply_screen(ui_screen_t::AC);
 }
 
-static void on_temp_down(lv_event_t *e)
+static void on_ac_arc_event(lv_event_t *e)
 {
-    (void)e;
+    const lv_event_code_t code = lv_event_get_code(e);
     display_activity_notify();
-    app_driver_ui_adjust_temp(-1);
-    apply_screen(ui_screen_t::AC);
-}
 
-static void on_temp_up(lv_event_t *e)
-{
-    (void)e;
-    display_activity_notify();
-    app_driver_ui_adjust_temp(1);
-    apply_screen(ui_screen_t::AC);
+    if (code == LV_EVENT_PRESSED) {
+        s_ac_arc_dragging = true;
+        return;
+    }
+
+    if (code == LV_EVENT_PRESS_LOST || code == LV_EVENT_RELEASED) {
+        if (s_ac_arc) {
+            const int temp = lv_arc_get_value(s_ac_arc);
+            s_ac_arc_dragging = false;
+            app_driver_ui_set_temp(temp);
+            apply_screen(ui_screen_t::AC);
+        } else {
+            s_ac_arc_dragging = false;
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_VALUE_CHANGED && s_ac_arc && s_ac_temp_label) {
+        bool power = false;
+        app_driver_ui_get_ac_state(nullptr, &power);
+        if (!power) {
+            /* Dragging the dial implies turning the AC on at that setpoint. */
+            lv_obj_clear_flag(s_ac_temp_label, LV_OBJ_FLAG_HIDDEN);
+            if (s_ac_status_label) {
+                const ui_strings_t *s = ui_strings(s_english.load());
+                int mode = 1;
+                app_driver_ui_get_ac_mode(&mode);
+                const char *to_label = s->ac_set_to;
+                if (mode == 1) {
+                    to_label = s->ac_cool_to;
+                } else if (mode == 2) {
+                    to_label = s->ac_heat_to;
+                }
+                lv_label_set_text(s_ac_status_label, to_label);
+                lv_obj_set_style_text_font(s_ac_status_label, &ui_font_cn_18, 0);
+                lv_obj_align(s_ac_status_label, LV_ALIGN_CENTER, 0, -22);
+            }
+        }
+        char tbuf[16];
+        std::snprintf(tbuf, sizeof(tbuf), "%d.0", lv_arc_get_value(s_ac_arc));
+        lv_label_set_text(s_ac_temp_label, tbuf);
+        lv_obj_align(s_ac_temp_label, LV_ALIGN_CENTER, 0, 10);
+    }
 }
 
 static void on_mode(lv_event_t *e)
@@ -795,30 +879,46 @@ static void build_ui(void)
     lv_obj_center(s_btn_primary_label);
     lv_obj_add_event_cb(s_btn_primary, on_learn, LV_EVENT_CLICKED, nullptr);
 
-    s_btn_power = UI_BTN_CREATE(s_root);
-    style_btn(s_btn_power, kColOk);
-    lv_obj_set_size(s_btn_power, 108, 44);
-    lv_obj_align(s_btn_power, LV_ALIGN_CENTER, 0, 8);
-    s_btn_power_label = make_label(s_btn_power, &ui_font_cn_18, 0xFFFFFF);
-    lv_obj_center(s_btn_power_label);
-    lv_obj_add_event_cb(s_btn_power, on_power, LV_EVENT_CLICKED, nullptr);
+    /*
+     * AC dial: ~270° arc open at the bottom (reference mock), blue indicator,
+     * white knob. Center tap toggles power; drag sets 16..30°C.
+     */
+    s_ac_arc = lv_arc_create(s_root);
+    lv_obj_set_size(s_ac_arc, 168, 168);
+    lv_obj_align(s_ac_arc, LV_ALIGN_CENTER, 0, 8);
+    lv_arc_set_range(s_ac_arc, 16, 30);
+    lv_arc_set_bg_angles(s_ac_arc, 135, 45);
+    lv_arc_set_mode(s_ac_arc, LV_ARC_MODE_NORMAL);
+    lv_arc_set_value(s_ac_arc, 25);
+    lv_obj_set_style_arc_width(s_ac_arc, 14, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_ac_arc, 14, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_ac_arc, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(s_ac_arc, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_ac_arc, lv_color_hex(kColArcTrack), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_ac_arc, lv_color_hex(kColArcCool), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_ac_arc, lv_color_hex(kColKnob), LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(s_ac_arc, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_ac_arc, 5, LV_PART_KNOB);
+    lv_obj_set_style_border_width(s_ac_arc, 0, LV_PART_KNOB);
+    lv_obj_add_event_cb(s_ac_arc, on_ac_arc_event, LV_EVENT_ALL, nullptr);
+    /* Keep gestures for page swipe; arc still receives drag on the ring. */
+    lv_obj_clear_flag(s_ac_arc, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    s_btn_down = UI_BTN_CREATE(s_root);
-    style_btn(s_btn_down, kColCool);
-    lv_obj_set_size(s_btn_down, 86, 40);
-    lv_obj_align(s_btn_down, LV_ALIGN_CENTER, -52, 58);
-    lv_obj_center(make_label(s_btn_down, &ui_font_cn_18, 0xFFFFFF));
-    lv_obj_add_event_cb(s_btn_down, on_temp_down, LV_EVENT_CLICKED, nullptr);
+    s_ac_status_label = make_label(s_root, &ui_font_cn_30, kColTitle);
+    lv_obj_set_width(s_ac_status_label, 120);
+    lv_obj_align(s_ac_status_label, LV_ALIGN_CENTER, 0, 0);
 
-    s_btn_up = UI_BTN_CREATE(s_root);
-    style_btn(s_btn_up, kColHeat);
-    lv_obj_set_size(s_btn_up, 86, 40);
-    lv_obj_align(s_btn_up, LV_ALIGN_CENTER, 52, 58);
-    lv_obj_center(make_label(s_btn_up, &ui_font_cn_18, 0xFFFFFF));
-    lv_obj_add_event_cb(s_btn_up, on_temp_up, LV_EVENT_CLICKED, nullptr);
+    s_ac_temp_label = make_label(s_root, &ui_font_cn_30, kColTitle);
+    lv_obj_align(s_ac_temp_label, LV_ALIGN_CENTER, 0, 10);
 
-    s_temp_label = make_label(s_root, &ui_font_cn_30, kColTitle);
-    lv_obj_align(s_temp_label, LV_ALIGN_CENTER, 0, -42);
+    s_ac_power_hit = lv_obj_create(s_root);
+    lv_obj_set_size(s_ac_power_hit, 88, 88);
+    lv_obj_align(s_ac_power_hit, LV_ALIGN_CENTER, 0, 8);
+    lv_obj_set_style_bg_opa(s_ac_power_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_ac_power_hit, 0, 0);
+    lv_obj_clear_flag(s_ac_power_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_ac_power_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_ac_power_hit, on_power, LV_EVENT_CLICKED, nullptr);
 
     s_hint = make_label(s_root, &ui_font_cn_18, kColMuted);
     lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
@@ -946,10 +1046,9 @@ static void ui_task(void *arg)
                     ws2812_temp_light_set_learn_active(
                         app_driver_ir_is_pairing());
                 }
-                if (++ticks >= 2) {
-                    apply_screen(next);
-                    ticks = 0;
-                }
+                /* Refresh often so IR remote / Matter changes mirror on-screen. */
+                apply_screen(next);
+                ticks = 0;
             } else if (next == ui_screen_t::PAIRING) {
                 if (++ticks >= 25) {
                     apply_screen(next);
@@ -1128,11 +1227,11 @@ void ui_deinit(void)
     s_code_label = nullptr;
     s_btn_primary = nullptr;
     s_btn_primary_label = nullptr;
-    s_btn_power = nullptr;
-    s_btn_power_label = nullptr;
-    s_btn_down = nullptr;
-    s_btn_up = nullptr;
-    s_temp_label = nullptr;
+    s_ac_arc = nullptr;
+    s_ac_status_label = nullptr;
+    s_ac_temp_label = nullptr;
+    s_ac_power_hit = nullptr;
+    s_ac_arc_dragging = false;
     s_mode_list = nullptr;
     s_brightness = nullptr;
     s_lang_btn = nullptr;

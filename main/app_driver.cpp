@@ -2295,15 +2295,46 @@ void app_driver_ui_get_ac_state(int *temp_c, bool *power_on)
     }
 }
 
+void app_driver_ui_get_ac_mode(int *mode)
+{
+    if (mode) {
+        *mode = Mode;
+    }
+}
+
+static std::atomic<int32_t> s_ambient_temp_milli_c{INT32_MIN};
+
+void app_driver_ui_set_ambient_temp_c(float temp_c)
+{
+    if (temp_c < -40.0f || temp_c > 85.0f) {
+        return;
+    }
+    s_ambient_temp_milli_c.store(static_cast<int32_t>(temp_c * 1000.0f),
+                                 std::memory_order_relaxed);
+}
+
+bool app_driver_ui_get_ambient_temp_c(float *temp_c)
+{
+    const int32_t milli =
+        s_ambient_temp_milli_c.load(std::memory_order_relaxed);
+    if (milli == INT32_MIN) {
+        return false;
+    }
+    if (temp_c) {
+        *temp_c = static_cast<float>(milli) / 1000.0f;
+    }
+    return true;
+}
+
 void app_driver_ui_toggle_power(void)
 {
     esp_matter_attr_val_t val = esp_matter_bool(!PowerOn);
     app_driver_room_air_conditioner_set_power(&val);
 }
 
-void app_driver_ui_adjust_temp(int delta)
+void app_driver_ui_set_temp(int temp_c)
 {
-    int next = Temp + delta;
+    int next = temp_c;
     if (next < 16) {
         next = 16;
     } else if (next > 30) {
@@ -2316,6 +2347,11 @@ void app_driver_ui_adjust_temp(int delta)
     app_matter_schedule_report_all_temperatures(temp_x100);
     app_matter_schedule_whole_device_state(PowerOn, Mode);
     app_driver_ir_queue_state(Temp, Mode, Fan, 0, PowerOn);
+}
+
+void app_driver_ui_adjust_temp(int delta)
+{
+    app_driver_ui_set_temp(Temp + delta);
 }
 
 void app_driver_ui_set_light_brightness(uint8_t level_1_254)

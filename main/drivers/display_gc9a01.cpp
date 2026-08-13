@@ -219,10 +219,14 @@ void display_set_idle_hold(bool hold)
 
 static void touch_map_point(lv_point_t *pt)
 {
-#if BOARD_LCD_MIRROR_X
+    /*
+     * Independent of BOARD_LCD_MIRROR_*: LCD MADCTL flips panel scan only.
+     * Remap touch here to match LVGL logical coordinates on this module.
+     */
+#if BOARD_TOUCH_MIRROR_X
     pt->x = static_cast<lv_coord_t>(BOARD_LCD_H_RES - 1 - pt->x);
 #endif
-#if BOARD_LCD_MIRROR_Y
+#if BOARD_TOUCH_MIRROR_Y
     pt->y = static_cast<lv_coord_t>(BOARD_LCD_V_RES - 1 - pt->y);
 #endif
 }

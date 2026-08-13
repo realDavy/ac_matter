@@ -35,8 +35,8 @@ else
   exit 1
 fi
 
-# CJK subset for ui_i18n.h (+ common extras). Keep ASCII/° on the Latin face.
-SYMBOLS='上中习亮件任光入关准分切加动升合后启吸呼围在外夜始学完对左并应度开式彩意感成或手扫按换控文新方显机正氛添温滑灯用白码示空红纯组网置色虹设请调输遥配重键闭间降需正在'
+# CJK subset for ui_i18n.h (+ AC dial labels 当前/至). Keep ASCII/° on Latin face.
+SYMBOLS='上中习亮件任光入关准分切加动升合后启吸呼围在外夜始学完对左并应度开式彩意感成或手扫按换控文新方显机正氛添温滑灯用白码示空红纯组网置色虹设请调输遥配重键闭间降需正在当前至'
 
 gen() {
   local size="$1" name="$2" bpp="$3"
